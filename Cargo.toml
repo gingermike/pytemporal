@@ -1,0 +1,18 @@
+[package]
+name = "bitemporal-timeseries"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrow = "50.0"
+pyo3 = { version = "0.21", features = ["extension-module"] }
+pyo3-arrow = "0.3"
+chrono = "0.4"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+rayon = "1.8"
+indexmap = "2.1"
+ordered-float = "4.2"
+
+[lib]
+name = "bitemporal_timeseries"
+crate-type = ["cdylib"]
