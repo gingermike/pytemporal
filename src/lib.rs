@@ -22,8 +22,8 @@ struct BitemporalRecord {
     original_index: Option<usize>,
 }
 
-// PostgreSQL infinity date representation
-const MAX_DATE: NaiveDate = match NaiveDate::from_ymd_opt(9999, 12, 31) {
+// Pandas-compatible max date (pandas can't handle dates beyond ~2262)
+const MAX_DATE: NaiveDate = match NaiveDate::from_ymd_opt(2262, 4, 11) {
     Some(date) => date,
     None => panic!("Invalid max date"),
 };
@@ -106,7 +106,7 @@ fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[Stri
     xxh64(&hasher_input, 0)
 }
 
-fn process_updates(
+fn compute_changes(
     current_state: RecordBatch,
     updates: RecordBatch,
     id_columns: Vec<String>,

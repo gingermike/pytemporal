@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools-rust"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "bitemporal-timeseries"
@@ -17,6 +17,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-benchmark",
+    "black",
+    "mypy",
+    "ruff",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "bitemporal_timeseries"
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
     "pytest-benchmark",
     "black",
     "mypy",
