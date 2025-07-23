@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-arrow = "50.0"
+arrow = "53.4"
 pyo3 = { version = "0.21", features = ["extension-module"] }
 pyo3-arrow = "0.3"
 chrono = "0.4"
@@ -16,3 +16,6 @@ ordered-float = "4.2"
 [lib]
 name = "bitemporal_timeseries"
 crate-type = ["cdylib"]
+
+[profile.release]
+lto = true

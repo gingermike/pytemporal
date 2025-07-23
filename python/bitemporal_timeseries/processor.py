@@ -9,8 +9,10 @@ PostgreSQL's infinity representation (9999-12-31) when outputting data.
 import pyarrow as pa
 import pandas as pd
 from typing import List, Tuple, Optional, Literal
-import bitemporal_timeseries
 from datetime import datetime
+
+# Import the Rust compute_changes function
+from .bitemporal_timeseries import compute_changes as _compute_changes
 
 # PostgreSQL infinity date representation
 POSTGRES_INFINITY = pd.Timestamp('9999-12-31 23:59:59')
@@ -68,7 +70,7 @@ class BitemporalTimeseriesProcessor:
         updates_batch = pa.RecordBatch.from_pandas(updates)
         
         # Call Rust function
-        expire_indices, insert_batch = bitemporal_timeseries.compute_changes(
+        expire_indices, insert_batch = _compute_changes(
             current_batch,
             updates_batch,
             self.id_columns,
@@ -81,9 +83,33 @@ class BitemporalTimeseriesProcessor:
         rows_to_expire = current_state.iloc[expire_indices].copy()
         rows_to_expire['as_of_to'] = system_date or pd.Timestamp.now().strftime('%Y-%m-%d')
         
-        # Convert insert batch back to pandas
-        rows_to_insert = insert_batch.to_pandas()
-        rows_to_insert = self._convert_from_internal_format(rows_to_insert)
+        # Convert insert batches back to pandas and combine them
+        if insert_batch:
+            insert_dfs = []
+            for batch in insert_batch:
+                # Convert arro3 RecordBatch to pandas DataFrame
+                # Now that we have arro3-core installed, we can access its methods
+                data = {}
+                col_names = batch.column_names
+                
+                for i in range(batch.num_columns):
+                    col_name = col_names[i]
+                    column = batch.column(i)
+                    
+                    # Convert column to Python list
+                    # arro3 columns have to_pylist method
+                    col_data = column.to_pylist()
+                    data[col_name] = col_data
+                
+                insert_dfs.append(pd.DataFrame(data))
+            
+            # Combine all DataFrames
+            rows_to_insert = pd.concat(insert_dfs, ignore_index=True) if insert_dfs else pd.DataFrame()
+        else:
+            rows_to_insert = pd.DataFrame()
+        
+        if not rows_to_insert.empty:
+            rows_to_insert = self._convert_from_internal_format(rows_to_insert)
         
         return rows_to_expire, rows_to_insert
     
@@ -124,8 +150,20 @@ class BitemporalTimeseriesProcessor:
         unbounded_columns = ['effective_to', 'as_of_to']
         for col in unbounded_columns:
             if col in df.columns:
-                # Any date beyond 2262 is treated as infinity
-                df.loc[df[col] >= pd.Timestamp('2262-01-01'), col] = POSTGRES_INFINITY
+                # Handle dates that are beyond pandas range or at the max value
+                try:
+                    # Convert to datetime first in case they're coming as strings or other types
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                    # Any date beyond 2262 is treated as infinity
+                    # Use a safer comparison to avoid overflow issues
+                    mask = df[col].dt.year >= 2262
+                    if mask.any():
+                        # Convert column to object to allow mixed types (datetime and string)
+                        df[col] = df[col].astype(object)
+                        df.loc[mask, col] = POSTGRES_INFINITY
+                except (pd.errors.OutOfBoundsDatetime, OverflowError):
+                    # If conversion fails due to overflow, assume it's infinity
+                    df[col] = POSTGRES_INFINITY
         
         return df
     

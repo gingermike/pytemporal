@@ -2,7 +2,7 @@ use arrow::array::{
     Array, ArrayRef, Date32Array, RecordBatch, StringArray, 
     Int32Array, Int64Array, Float64Array
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{NaiveDate, Days};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
@@ -106,7 +106,7 @@ fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[Stri
     xxh64(&hasher_input, 0)
 }
 
-fn compute_changes(
+fn process_updates(
     current_state: RecordBatch,
     updates: RecordBatch,
     id_columns: Vec<String>,
@@ -524,4 +524,54 @@ fn combine_record_batches(batches: Vec<RecordBatch>) -> PyResult<RecordBatch> {
     
     RecordBatch::try_new(schema.clone(), final_columns)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+fn compute_changes(
+    current_state: PyRecordBatch,
+    updates: PyRecordBatch,
+    id_columns: Vec<String>,
+    value_columns: Vec<String>,
+    system_date: String,
+    update_mode: String,
+) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>)> {
+    // Convert PyRecordBatch to Arrow RecordBatch
+    let current_batch = current_state.as_ref().clone();
+    let updates_batch = updates.as_ref().clone();
+    
+    // Parse system_date
+    let system_date = chrono::NaiveDate::parse_from_str(&system_date, "%Y-%m-%d")
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid date format: {}", e)))?;
+    
+    // Parse update_mode
+    let mode = match update_mode.as_str() {
+        "delta" => UpdateMode::Delta,
+        "full_state" => UpdateMode::FullState,
+        _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid update_mode. Must be 'delta' or 'full_state'")),
+    };
+    
+    // Call the process_updates function
+    let changeset = process_updates(
+        current_batch,
+        updates_batch,
+        id_columns,
+        value_columns,
+        system_date,
+        mode,
+    )?;
+    
+    // Convert the result back to Python types
+    let expire_indices = changeset.to_expire;
+    let insert_batches: Vec<PyRecordBatch> = changeset.to_insert
+        .into_iter()
+        .map(|batch| PyRecordBatch::new(batch))
+        .collect();
+    
+    Ok((expire_indices, insert_batches))
+}
+
+#[pymodule]
+fn bitemporal_timeseries(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(compute_changes, m)?)?;
+    Ok(())
 }
