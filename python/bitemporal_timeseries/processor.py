@@ -132,6 +132,10 @@ class BitemporalTimeseriesProcessor:
                 # Convert to date for processing
                 df[col] = df[col].dt.date
         
+        # Add value_hash column if it doesn't exist (it will be computed by Rust)
+        if 'value_hash' not in df.columns:
+            df['value_hash'] = 0  # Placeholder, will be computed by Rust
+        
         return df
     
     def _convert_from_internal_format(self, df: pd.DataFrame) -> pd.DataFrame:

@@ -409,6 +409,10 @@ fn create_record_batch_from_record(
             let days = (record.as_of_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
             builder.append_value(days as i32);
             columns.push(Arc::new(builder.finish()));
+        } else if column_name == "value_hash" {
+            let mut builder = Int64Array::builder(1);
+            builder.append_value(record.value_hash as i64);
+            columns.push(Arc::new(builder.finish()));
         } else {
             // Copy from original batch
             let orig_array = original_batch.column_by_name(column_name).unwrap();
@@ -451,6 +455,10 @@ fn create_record_batch_from_update(
             let mut builder = Date32Array::builder(1);
             let days = (record.as_of_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
             builder.append_value(days as i32);
+            columns.push(Arc::new(builder.finish()));
+        } else if column_name == "value_hash" {
+            let mut builder = Int64Array::builder(1);
+            builder.append_value(record.value_hash as i64);
             columns.push(Arc::new(builder.finish()));
         } else {
             // Copy from updates

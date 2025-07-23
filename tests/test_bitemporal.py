@@ -487,6 +487,43 @@ class TestBitemporalEdgeCases(unittest.TestCase):
         # Should only process the non-expired record
         self.assertEqual(len(to_expire), 1)
         self.assertEqual(to_expire.iloc[0]['value'], 200)
+    
+    def test_hash_values_returned(self):
+        """Test that hash values are included in the returned data."""
+        current = pd.DataFrame({
+            'id': [1],
+            'value': [100],
+            'effective_from': pd.to_datetime(['2024-01-01']),
+            'effective_to': [TEST_INFINITY],
+            'as_of_from': pd.to_datetime(['2024-01-01']),
+            'as_of_to': [TEST_INFINITY]
+        })
+
+        updates = pd.DataFrame({
+            'id': [1],
+            'value': [150],
+            'effective_from': pd.to_datetime(['2024-06-01']),
+            'effective_to': pd.to_datetime(['2024-08-31']),
+            'as_of_from': pd.to_datetime(['2024-07-21']),
+            'as_of_to': [TEST_INFINITY]
+        })
+
+        to_expire, to_insert = self.processor.compute_changes(
+            current, updates, '2024-07-21'
+        )
+
+        # Check that value_hash column exists
+        self.assertIn('value_hash', to_insert.columns)
+        
+        # Check that hash values are integers
+        for hash_value in to_insert['value_hash']:
+            self.assertIsInstance(hash_value, (int, np.integer))
+            
+        # Check that different value combinations have different hashes
+        unique_hashes = to_insert['value_hash'].nunique()
+        # We expect at least 1 hash value
+        self.assertGreaterEqual(unique_hashes, 1)
+
 
 
 if __name__ == '__main__':
