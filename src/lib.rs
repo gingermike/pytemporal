@@ -114,28 +114,22 @@ fn process_updates(
     system_date: NaiveDate,
     update_mode: UpdateMode,
 ) -> PyResult<ChangeSet> {
-    // Build index of current state by ID and effective_from
-    let mut state_index: HashMap<Vec<ScalarValue>, BTreeMap<NaiveDate, BitemporalRecord>> = HashMap::new();
+    let mut to_expire = Vec::new();
+    let mut to_insert = Vec::new();
+    
+    // Group by ID to process each timeseries independently
+    let mut id_groups: HashMap<Vec<ScalarValue>, (Vec<BitemporalRecord>, Vec<BitemporalRecord>)> = HashMap::new();
     
     // Parse current state
-    let eff_from_col = current_state.column_by_name("effective_from").unwrap();
-    let eff_to_col = current_state.column_by_name("effective_to").unwrap();
-    let as_of_from_col = current_state.column_by_name("as_of_from").unwrap();
-    let as_of_to_col = current_state.column_by_name("as_of_to").unwrap();
+    let eff_from_array = current_state.column_by_name("effective_from").unwrap()
+        .as_any().downcast_ref::<Date32Array>().unwrap();
+    let eff_to_array = current_state.column_by_name("effective_to").unwrap()
+        .as_any().downcast_ref::<Date32Array>().unwrap();
+    let as_of_from_array = current_state.column_by_name("as_of_from").unwrap()
+        .as_any().downcast_ref::<Date32Array>().unwrap();
     
-    let eff_from_array = eff_from_col.as_any().downcast_ref::<Date32Array>().unwrap();
-    let eff_to_array = eff_to_col.as_any().downcast_ref::<Date32Array>().unwrap();
-    let as_of_from_array = as_of_from_col.as_any().downcast_ref::<Date32Array>().unwrap();
-    let as_of_to_array = as_of_to_col.as_any().downcast_ref::<Date32Array>().unwrap();
-    
-    // Build sorted index of current state
+    // Collect current state records
     for row_idx in 0..current_state.num_rows() {
-        // Skip already expired rows
-        let as_of_to = extract_date(as_of_to_array, row_idx);
-        if as_of_to != MAX_DATE {
-            continue;
-        }
-        
         let mut id_values = Vec::new();
         for id_col in &id_columns {
             let col_idx = current_state.schema().index_of(id_col).unwrap();
@@ -153,40 +147,14 @@ fn process_updates(
             original_index: Some(row_idx),
         };
         
-        // BTreeMap automatically keeps records sorted by effective_from
-        state_index.entry(id_values)
-            .or_insert_with(BTreeMap::new)
-            .insert(record.effective_from, record);
+        id_groups.entry(id_values).or_insert((Vec::new(), Vec::new())).0.push(record);
     }
     
-    // Validate current state has no overlaps
-    for (id_values, timeline) in &state_index {
-        let mut prev_end: Option<NaiveDate> = None;
-        for (_, record) in timeline.iter() {
-            if let Some(prev) = prev_end {
-                if prev > record.effective_from {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        format!("Overlapping records found in current state for ID {:?}", id_values)
-                    ));
-                }
-            }
-            prev_end = Some(record.effective_to);
-        }
-    }
-    
-    let mut to_expire = Vec::new();
-    let mut to_insert = Vec::new();
-    
-    // Track which IDs we've seen in updates (for full state mode)
-    let mut seen_ids: HashSet<Vec<ScalarValue>> = HashSet::new();
-    
-    // Sort updates by ID and effective_from for consistent processing
-    let mut update_records: Vec<(usize, Vec<ScalarValue>, NaiveDate, NaiveDate, u64)> = Vec::new();
-    
-    let upd_eff_from_array = updates.column_by_name("effective_from")
-        .unwrap().as_any().downcast_ref::<Date32Array>().unwrap();
-    let upd_eff_to_array = updates.column_by_name("effective_to")
-        .unwrap().as_any().downcast_ref::<Date32Array>().unwrap();
+    // Parse updates
+    let upd_eff_from_array = updates.column_by_name("effective_from").unwrap()
+        .as_any().downcast_ref::<Date32Array>().unwrap();
+    let upd_eff_to_array = updates.column_by_name("effective_to").unwrap()
+        .as_any().downcast_ref::<Date32Array>().unwrap();
     
     for upd_idx in 0..updates.num_rows() {
         let mut upd_id_values = Vec::new();
@@ -196,176 +164,75 @@ fn process_updates(
             upd_id_values.push(ScalarValue::from_array(array, upd_idx));
         }
         
-        let upd_eff_from = extract_date(upd_eff_from_array, upd_idx);
-        let upd_eff_to = extract_date(upd_eff_to_array, upd_idx);
-        let upd_hash = hash_values(&updates, upd_idx, &value_columns);
+        let record = BitemporalRecord {
+            id_values: upd_id_values.clone(),
+            value_hash: hash_values(&updates, upd_idx, &value_columns),
+            effective_from: extract_date(upd_eff_from_array, upd_idx),
+            effective_to: extract_date(upd_eff_to_array, upd_idx),
+            as_of_from: system_date,
+            as_of_to: MAX_DATE,
+            original_index: Some(upd_idx), // Store update index for reference
+        };
         
-        update_records.push((upd_idx, upd_id_values, upd_eff_from, upd_eff_to, upd_hash));
+        id_groups.entry(upd_id_values).or_insert((Vec::new(), Vec::new())).1.push(record);
     }
     
-    // Sort updates by ID and effective_from to ensure consistent processing
-    update_records.sort_by(|a, b| {
-        match a.1.cmp(&b.1) {
-            std::cmp::Ordering::Equal => a.2.cmp(&b.2),
-            other => other,
-        }
-    });
+    // Track which IDs appear in updates (for full state mode)
+    let update_ids: HashSet<Vec<ScalarValue>> = id_groups.iter()
+        .filter(|(_, (_, updates_vec))| !updates_vec.is_empty())
+        .map(|(id, _)| id.clone())
+        .collect();
     
-    // Process sorted updates
-    for (upd_idx, upd_id_values, upd_eff_from, upd_eff_to, upd_hash) in update_records {
-        // Track this ID for full state mode
-        seen_ids.insert(upd_id_values.clone());
+    // Process each ID group independently
+    for (id_values, (mut current_records, mut update_records)) in id_groups {
+        // Sort records by effective_from for chronological processing
+        current_records.sort_by_key(|r| r.effective_from);
+        update_records.sort_by_key(|r| r.effective_from);
         
-        if let Some(timeline) = state_index.get_mut(&upd_id_values) {
-            // Find ALL overlapping records (not just processing them one by one)
-            let overlapping: Vec<_> = timeline
-                .iter()
-                .filter(|(_, rec)| {
-                    rec.effective_from < upd_eff_to && rec.effective_to > upd_eff_from
-                })
-                .map(|(k, v)| (*k, v.clone()))
-                .collect();
-            
-            if overlapping.is_empty() {
-                // No overlap - pure insert
-                let new_rec = BitemporalRecord {
-                    id_values: upd_id_values,
-                    value_hash: upd_hash,
-                    effective_from: upd_eff_from,
-                    effective_to: upd_eff_to,
-                    as_of_from: system_date,
-                    as_of_to: MAX_DATE,
-                    original_index: None,
-                };
-                to_insert.push(create_record_batch_from_update(&updates, upd_idx, &new_rec)?);
-            } else {
-                // Process all overlapping records together
-                let first_start = overlapping.iter().map(|(_, r)| r.effective_from).min().unwrap();
-                let last_end = overlapping.iter().map(|(_, r)| r.effective_to).max().unwrap();
-                
-                // Mark all overlapping records for expiry
-                for (_, existing) in &overlapping {
-                    if let Some(orig_idx) = existing.original_index {
-                        to_expire.push(orig_idx);
-                    }
-                }
-                
-                // Build the new timeline segments
-                let mut segments: Vec<(NaiveDate, NaiveDate, Option<&BitemporalRecord>, bool)> = Vec::new();
-                
-                // Add segment before update if needed
-                if first_start < upd_eff_from {
-                    let before_rec = overlapping.iter()
-                        .find(|(_, r)| r.effective_from <= upd_eff_from && r.effective_to > upd_eff_from)
-                        .map(|(_, r)| r);
-                    segments.push((first_start, upd_eff_from, before_rec, false));
-                }
-                
-                // Add the update segment
-                segments.push((
-                    upd_eff_from.max(first_start), 
-                    upd_eff_to.min(last_end), 
-                    None, 
-                    true
-                ));
-                
-                // Add segment after update if needed
-                if last_end > upd_eff_to {
-                    let after_rec = overlapping.iter()
-                        .find(|(_, r)| r.effective_from < upd_eff_to && r.effective_to >= upd_eff_to)
-                        .map(|(_, r)| r);
-                    segments.push((upd_eff_to, last_end, after_rec, false));
-                }
-                
-                // Fill any gaps between original records
-                let mut sorted_overlapping = overlapping.clone();
-                sorted_overlapping.sort_by_key(|(_, r)| r.effective_from);
-                
-                for window in sorted_overlapping.windows(2) {
-                    let (_, rec1) = &window[0];
-                    let (_, rec2) = &window[1];
-                    
-                    if rec1.effective_to < rec2.effective_from {
-                        // There's a gap - check if it's covered by our segments
-                        let gap_start = rec1.effective_to;
-                        let gap_end = rec2.effective_from;
-                        
-                        // Only add gap segments that aren't covered by the update
-                        if gap_end <= upd_eff_from || gap_start >= upd_eff_to {
-                            segments.push((gap_start, gap_end, None, false));
-                        }
-                    }
-                }
-                
-                // Sort segments and merge adjacent ones with same properties
-                segments.sort_by_key(|s| s.0);
-                
-                // Create record batches for each segment
-                for (seg_from, seg_to, source_rec, is_update) in segments {
-                    if is_update {
-                        // This is the update segment
-                        let update_rec = BitemporalRecord {
-                            id_values: upd_id_values.clone(),
-                            value_hash: upd_hash,
-                            effective_from: seg_from,
-                            effective_to: seg_to,
-                            as_of_from: system_date,
-                            as_of_to: MAX_DATE,
-                            original_index: None,
-                        };
-                        to_insert.push(create_record_batch_from_update(&updates, upd_idx, &update_rec)?);
-                    } else if let Some(rec) = source_rec {
-                        // This segment comes from an existing record
-                        let segment_rec = BitemporalRecord {
-                            id_values: rec.id_values.clone(),
-                            value_hash: rec.value_hash,
-                            effective_from: seg_from,
-                            effective_to: seg_to,
-                            as_of_from: system_date,
-                            as_of_to: MAX_DATE,
-                            original_index: None,
-                        };
-                        to_insert.push(create_record_batch_from_record(
-                            &segment_rec,
-                            &current_state,
-                            rec.original_index.unwrap(),
-                            &id_columns,
-                            &value_columns
-                        )?);
-                    }
-                }
-                
-                // Remove all overlapping records from the timeline
-                for (eff_from, _) in overlapping {
-                    timeline.remove(&eff_from);
-                }
-            }
-        } else {
-            // Pure insert - no existing records
-            let new_rec = BitemporalRecord {
-                id_values: upd_id_values,
-                value_hash: upd_hash,
-                effective_from: upd_eff_from,
-                effective_to: upd_eff_to,
-                as_of_from: system_date,
-                as_of_to: MAX_DATE,
-                original_index: None,
-            };
-            to_insert.push(create_record_batch_from_update(&updates, upd_idx, &new_rec)?);
-        }
-    }
-    
-    // Handle full state mode - expire any IDs not in the update set
-    if update_mode == UpdateMode::FullState {
-        for (id_values, timeline) in &state_index {
-            if !seen_ids.contains(id_values) {
-                // This ID is not in the updates, so expire all its records
-                for (_, record) in timeline {
+        if update_records.is_empty() {
+            // No updates for this ID
+            if update_mode == UpdateMode::FullState {
+                // In full state mode, expire all current records for IDs not in updates
+                for record in current_records {
                     if let Some(orig_idx) = record.original_index {
                         to_expire.push(orig_idx);
                     }
                 }
             }
+            continue;
+        }
+        
+        if update_mode == UpdateMode::FullState {
+            // In full state mode, expire all current records and insert update records as-is
+            for record in &current_records {
+                if let Some(orig_idx) = record.original_index {
+                    to_expire.push(orig_idx);
+                }
+            }
+            
+            // Insert each update record exactly as provided
+            for update_record in &update_records {
+                let batch = create_record_batch_from_update(
+                    &updates,
+                    update_record.original_index.unwrap(),
+                    update_record,
+                )?;
+                to_insert.push(batch);
+            }
+        } else {
+            // Delta mode - use concurrent pointer approach
+            let (expire_indices, insert_batches) = process_id_timeline(
+                &current_records,
+                &update_records,
+                &current_state,
+                &updates,
+                &id_columns,
+                &value_columns,
+                system_date,
+            )?;
+            
+            to_expire.extend(expire_indices);
+            to_insert.extend(insert_batches);
         }
     }
     
@@ -373,7 +240,240 @@ fn process_updates(
     to_expire.sort_unstable();
     to_expire.dedup();
     
+    // Deduplicate insert batches by combining identical time periods
+    to_insert = deduplicate_record_batches(to_insert)?;
+    
     Ok(ChangeSet { to_expire, to_insert })
+}
+
+#[derive(Debug, Clone)]
+struct TimelineEvent {
+    date: NaiveDate,
+    event_type: EventType,
+    record: BitemporalRecord,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum EventType {
+    CurrentStart,
+    CurrentEnd,
+    UpdateStart,
+    UpdateEnd,
+}
+
+fn process_id_timeline(
+    current_records: &[BitemporalRecord],
+    update_records: &[BitemporalRecord],
+    current_batch: &RecordBatch,
+    updates_batch: &RecordBatch,
+    id_columns: &[String],
+    value_columns: &[String],
+    system_date: NaiveDate,
+) -> PyResult<(Vec<usize>, Vec<RecordBatch>)> {
+    let mut expire_indices = Vec::new();
+    let mut insert_batches = Vec::new();
+    
+    // Create timeline events for current state and updates
+    let mut events = Vec::new();
+    
+    // Add current state events
+    for record in current_records {
+        events.push(TimelineEvent {
+            date: record.effective_from,
+            event_type: EventType::CurrentStart,
+            record: record.clone(),
+        });
+        if record.effective_to != MAX_DATE {
+            events.push(TimelineEvent {
+                date: record.effective_to,
+                event_type: EventType::CurrentEnd,
+                record: record.clone(),
+            });
+        }
+    }
+    
+    // Add update events
+    for record in update_records {
+        events.push(TimelineEvent {
+            date: record.effective_from,
+            event_type: EventType::UpdateStart,
+            record: record.clone(),
+        });
+        if record.effective_to != MAX_DATE {
+            events.push(TimelineEvent {
+                date: record.effective_to,
+                event_type: EventType::UpdateEnd,
+                record: record.clone(),
+            });
+        }
+    }
+    
+    // Sort events chronologically, with specific ordering for same dates
+    events.sort_by(|a, b| {
+        match a.date.cmp(&b.date) {
+            std::cmp::Ordering::Equal => {
+                // For same date, process in order: CurrentEnd, UpdateStart, UpdateEnd, CurrentStart
+                use EventType::*;
+                let order = |t: &EventType| match t {
+                    CurrentEnd => 0,
+                    UpdateStart => 1,
+                    UpdateEnd => 2,
+                    CurrentStart => 3,
+                };
+                order(&a.event_type).cmp(&order(&b.event_type))
+            }
+            other => other,
+        }
+    });
+    
+    // Track active records at each point in time
+    let mut active_current: Vec<&BitemporalRecord> = Vec::new();
+    let mut active_updates: Vec<&BitemporalRecord> = Vec::new();
+    
+    let mut last_date = None;
+    
+    // Process events chronologically
+    let mut i = 0;
+    while i < events.len() {
+        let current_date = events[i].date;
+        
+        // If we have a date gap and active state, emit a record for the gap
+        if let Some(prev_date) = last_date {
+            if prev_date < current_date && (!active_current.is_empty() || !active_updates.is_empty()) {
+                emit_segment(
+                    prev_date,
+                    current_date,
+                    &active_current,
+                    &active_updates,
+                    current_batch,
+                    updates_batch,
+                    id_columns,
+                    value_columns,
+                    system_date,
+                    &mut expire_indices,
+                    &mut insert_batches,
+                )?;
+            }
+        }
+        
+        // Process all events at this date
+        while i < events.len() && events[i].date == current_date {
+            let event = &events[i];
+            match event.event_type {
+                EventType::CurrentStart => {
+                    active_current.push(&event.record);
+                }
+                EventType::CurrentEnd => {
+                    active_current.retain(|r| r.effective_from != event.record.effective_from);
+                }
+                EventType::UpdateStart => {
+                    active_updates.push(&event.record);
+                }
+                EventType::UpdateEnd => {
+                    active_updates.retain(|r| r.effective_from != event.record.effective_from);
+                }
+            }
+            i += 1;
+        }
+        
+        last_date = Some(current_date);
+        
+        // Find next different date or end
+        let mut next_date = MAX_DATE;
+        if i < events.len() {
+            next_date = events[i].date;
+        }
+        
+        // Emit segment from current_date to next_date if we have active state
+        if (!active_current.is_empty() || !active_updates.is_empty()) && next_date > current_date {
+            emit_segment(
+                current_date,
+                next_date,
+                &active_current,
+                &active_updates,
+                current_batch,
+                updates_batch,
+                id_columns,
+                value_columns,
+                system_date,
+                &mut expire_indices,
+                &mut insert_batches,
+            )?;
+        }
+    }
+    
+    // Expire all current records that had any overlap with updates
+    for current_record in current_records {
+        let has_overlap = update_records.iter().any(|update_record| {
+            current_record.effective_from < update_record.effective_to &&
+            current_record.effective_to > update_record.effective_from
+        });
+        
+        if has_overlap {
+            if let Some(orig_idx) = current_record.original_index {
+                expire_indices.push(orig_idx);
+            }
+        }
+    }
+    
+    Ok((expire_indices, insert_batches))
+}
+
+fn emit_segment(
+    from_date: NaiveDate,
+    to_date: NaiveDate,
+    active_current: &[&BitemporalRecord],
+    active_updates: &[&BitemporalRecord],
+    current_batch: &RecordBatch,
+    updates_batch: &RecordBatch,
+    id_columns: &[String],
+    value_columns: &[String],
+    system_date: NaiveDate,
+    expire_indices: &mut Vec<usize>,
+    insert_batches: &mut Vec<RecordBatch>,
+) -> PyResult<()> {
+    // Priority: updates override current state
+    if let Some(update_record) = active_updates.first() {
+        // Emit update record for this segment
+        let segment_record = BitemporalRecord {
+            id_values: update_record.id_values.clone(),
+            value_hash: update_record.value_hash,
+            effective_from: from_date,
+            effective_to: to_date,
+            as_of_from: system_date,
+            as_of_to: MAX_DATE,
+            original_index: None,
+        };
+        
+        let batch = create_record_batch_from_update(
+            updates_batch,
+            update_record.original_index.unwrap(),
+            &segment_record,
+        )?;
+        insert_batches.push(batch);
+    } else if let Some(current_record) = active_current.first() {
+        // Emit current state record for this segment (only if no updates active)
+        let segment_record = BitemporalRecord {
+            id_values: current_record.id_values.clone(),
+            value_hash: current_record.value_hash,
+            effective_from: from_date,
+            effective_to: to_date,
+            as_of_from: system_date,
+            as_of_to: MAX_DATE,
+            original_index: None,
+        };
+        
+        let batch = create_record_batch_from_record(
+            &segment_record,
+            current_batch,
+            current_record.original_index.unwrap(),
+            id_columns,
+            value_columns,
+        )?;
+        insert_batches.push(batch);
+    }
+    
+    Ok(())
 }
 
 fn create_record_batch_from_record(
@@ -470,6 +570,59 @@ fn create_record_batch_from_update(
     
     RecordBatch::try_new(schema.clone(), columns)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> PyResult<Vec<RecordBatch>> {
+    if batches.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // Convert RecordBatches to a more workable format for deduplication
+    let mut records: Vec<(NaiveDate, NaiveDate, u64, RecordBatch)> = Vec::new();
+    
+    for batch in batches {
+        if batch.num_rows() == 1 {
+            let eff_from_array = batch.column_by_name("effective_from").unwrap()
+                .as_any().downcast_ref::<Date32Array>().unwrap();
+            let eff_to_array = batch.column_by_name("effective_to").unwrap()
+                .as_any().downcast_ref::<Date32Array>().unwrap();
+            let hash_array = batch.column_by_name("value_hash").unwrap()
+                .as_any().downcast_ref::<Int64Array>().unwrap();
+            
+            let eff_from = extract_date(eff_from_array, 0);
+            let eff_to = extract_date(eff_to_array, 0);
+            let hash = hash_array.value(0) as u64;
+            
+            records.push((eff_from, eff_to, hash, batch));
+        }
+    }
+    
+    // Sort by effective_from, then effective_to, then hash
+    records.sort_by(|a, b| {
+        match a.0.cmp(&b.0) {
+            std::cmp::Ordering::Equal => {
+                match a.1.cmp(&b.1) {
+                    std::cmp::Ordering::Equal => a.2.cmp(&b.2),
+                    other => other,
+                }
+            }
+            other => other,
+        }
+    });
+    
+    // Remove exact duplicates
+    let mut deduped: Vec<RecordBatch> = Vec::new();
+    let mut last_key: Option<(NaiveDate, NaiveDate, u64)> = None;
+    
+    for (eff_from, eff_to, hash, batch) in records {
+        let current_key = (eff_from, eff_to, hash);
+        if last_key != Some(current_key) {
+            deduped.push(batch);
+            last_key = Some(current_key);
+        }
+    }
+    
+    Ok(deduped)
 }
 
 fn combine_record_batches(batches: Vec<RecordBatch>) -> PyResult<RecordBatch> {

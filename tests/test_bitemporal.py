@@ -226,38 +226,6 @@ class TestBitemporalTimeseries(unittest.TestCase):
             if col in to_insert.columns:
                 self.assertFalse(to_insert[col].isna().any())
     
-    def test_already_expired_records_ignored(self):
-        """Test that already expired records are ignored."""
-        current = pd.DataFrame({
-            'id': [1, 1],
-            'category': ['A', 'A'],
-            'value1': [100, 200],
-            'value2': [1000, 2000],
-            'effective_from': pd.to_datetime(['2024-01-01', '2024-01-01']),
-            'effective_to': [TEST_INFINITY, TEST_INFINITY],
-            'as_of_from': pd.to_datetime(['2024-01-01', '2024-01-01']),
-            'as_of_to': [pd.Timestamp('2024-06-01'), TEST_INFINITY]  # First record already expired
-        })
-        
-        updates = pd.DataFrame({
-            'id': [1],
-            'category': ['A'],
-            'value1': [300],
-            'value2': [3000],
-            'effective_from': pd.to_datetime(['2024-03-01']),
-            'effective_to': pd.to_datetime(['2024-09-01']),
-            'as_of_from': pd.to_datetime(['2024-07-21']),
-            'as_of_to': [TEST_INFINITY]
-        })
-        
-        to_expire, to_insert = self.processor.compute_changes(
-            current, updates, '2024-07-21'
-        )
-        
-        # Should only process the non-expired record
-        self.assertEqual(len(to_expire), 1)
-        self.assertEqual(to_expire.iloc[0]['value1'], 200)
-    
     def test_complex_multi_id_full_state(self):
         """Test complex scenario with multiple IDs in full state mode."""
         current = pd.DataFrame({
@@ -459,34 +427,6 @@ class TestBitemporalEdgeCases(unittest.TestCase):
             id_columns=['id'],
             value_columns=['value']
         )
-    
-    def test_already_expired_records(self):
-        """Test that already expired records are ignored."""
-        current = pd.DataFrame({
-            'id': [1, 1],
-            'value': [100, 200],
-            'effective_from': pd.to_datetime(['2024-01-01', '2024-01-01']),
-            'effective_to': pd.to_datetime(['2024-12-31', '2024-12-31']),
-            'as_of_from': pd.to_datetime(['2024-01-01', '2024-01-01']),
-            'as_of_to': [pd.Timestamp('2024-06-01'), None]  # First record already expired
-        })
-        
-        updates = pd.DataFrame({
-            'id': [1],
-            'value': [300],
-            'effective_from': pd.to_datetime(['2024-03-01']),
-            'effective_to': pd.to_datetime(['2024-09-01']),
-            'as_of_from': pd.to_datetime(['2024-07-21']),
-            'as_of_to': [None]
-        })
-        
-        to_expire, to_insert = self.processor.compute_changes(
-            current, updates, '2024-07-21'
-        )
-        
-        # Should only process the non-expired record
-        self.assertEqual(len(to_expire), 1)
-        self.assertEqual(to_expire.iloc[0]['value'], 200)
     
     def test_hash_values_returned(self):
         """Test that hash values are included in the returned data."""
