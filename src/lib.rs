@@ -434,23 +434,54 @@ fn emit_segment(
 ) -> PyResult<()> {
     // Priority: updates override current state
     if let Some(update_record) = active_updates.first() {
-        // Emit update record for this segment
-        let segment_record = BitemporalRecord {
-            id_values: update_record.id_values.clone(),
-            value_hash: update_record.value_hash,
-            effective_from: from_date,
-            effective_to: to_date,
-            as_of_from: system_date,
-            as_of_to: MAX_DATE,
-            original_index: None,
+        // Check if the update has different values than current state
+        let should_emit_update = if let Some(current_record) = active_current.first() {
+            // Only emit if values have actually changed
+            update_record.value_hash != current_record.value_hash
+        } else {
+            // No current state, always emit the update
+            true
         };
         
-        let batch = create_record_batch_from_update(
-            updates_batch,
-            update_record.original_index.unwrap(),
-            &segment_record,
-        )?;
-        insert_batches.push(batch);
+        if should_emit_update {
+            // Emit update record for this segment
+            let segment_record = BitemporalRecord {
+                id_values: update_record.id_values.clone(),
+                value_hash: update_record.value_hash,
+                effective_from: from_date,
+                effective_to: to_date,
+                as_of_from: system_date,
+                as_of_to: MAX_DATE,
+                original_index: None,
+            };
+            
+            let batch = create_record_batch_from_update(
+                updates_batch,
+                update_record.original_index.unwrap(),
+                &segment_record,
+            )?;
+            insert_batches.push(batch);
+        } else {
+            // Values haven't changed, emit the current state record instead
+            let segment_record = BitemporalRecord {
+                id_values: active_current.first().unwrap().id_values.clone(),
+                value_hash: active_current.first().unwrap().value_hash,
+                effective_from: from_date,
+                effective_to: to_date,
+                as_of_from: system_date,
+                as_of_to: MAX_DATE,
+                original_index: None,
+            };
+            
+            let batch = create_record_batch_from_record(
+                &segment_record,
+                current_batch,
+                active_current.first().unwrap().original_index.unwrap(),
+                id_columns,
+                value_columns,
+            )?;
+            insert_batches.push(batch);
+        }
     } else if let Some(current_record) = active_current.first() {
         // Emit current state record for this segment (only if no updates active)
         let segment_record = BitemporalRecord {
