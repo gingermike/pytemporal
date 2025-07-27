@@ -44,7 +44,7 @@ class BitemporalTimeseriesProcessor:
         self, 
         current_state: pd.DataFrame, 
         updates: pd.DataFrame,
-        system_date: Optional[str] = None,
+        system_date: Optional[str] = datetime.today().strftime('%Y-%m-%d'),
         update_mode: Literal["delta", "full_state"] = "delta"
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
