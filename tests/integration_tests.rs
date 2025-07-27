@@ -1,7 +1,7 @@
 use bitemporal_timeseries::{process_updates, UpdateMode, ChangeSet};
-use chrono::NaiveDate;
-use arrow::array::{Date32Array, Int32Array, Int64Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use chrono::{NaiveDate, NaiveDateTime};
+use arrow::array::{Date32Array, TimestampMicrosecondArray, Int32Array, Int64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
@@ -15,8 +15,8 @@ fn create_test_batch(
     let mut price_builder = Int32Array::builder(data.len());
     let mut eff_from_builder = Date32Array::builder(data.len());
     let mut eff_to_builder = Date32Array::builder(data.len());
-    let mut as_of_from_builder = Date32Array::builder(data.len());
-    let mut as_of_to_builder = Date32Array::builder(data.len());
+    let mut as_of_from_builder = TimestampMicrosecondArray::builder(data.len());
+    let mut as_of_to_builder = TimestampMicrosecondArray::builder(data.len());
     let mut value_hash_builder = Int64Array::builder(data.len());
 
     // Constants for date conversion
@@ -47,18 +47,22 @@ fn create_test_batch(
         eff_to_builder.append_value(eff_to_days);
         
         let as_of_from_date = NaiveDate::parse_from_str(as_of_from, "%Y-%m-%d")
-            .map_err(|e| e.to_string())?;
-        let as_of_from_days = (as_of_from_date - epoch).num_days() as i32;
-        as_of_from_builder.append_value(as_of_from_days);
+            .map_err(|e| e.to_string())?
+            .and_hms_opt(0, 0, 0).unwrap();
+        let epoch_datetime = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+        let as_of_from_microseconds = (as_of_from_date - epoch_datetime).num_microseconds().unwrap();
+        as_of_from_builder.append_value(as_of_from_microseconds);
         
         let as_of_to_date = if as_of_to == "max" {
-            MAX_DATE
+            MAX_DATE.and_hms_opt(23, 59, 59).unwrap()
         } else {
             NaiveDate::parse_from_str(as_of_to, "%Y-%m-%d")
                 .map_err(|e| e.to_string())?
+                .and_hms_opt(23, 59, 59).unwrap()
         };
-        let as_of_to_days = (as_of_to_date - epoch).num_days() as i32;
-        as_of_to_builder.append_value(as_of_to_days);
+        let epoch_datetime = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+        let as_of_to_microseconds = (as_of_to_date - epoch_datetime).num_microseconds().unwrap();
+        as_of_to_builder.append_value(as_of_to_microseconds);
         
         value_hash_builder.append_value(0); // Placeholder, will be computed
     }
@@ -70,8 +74,8 @@ fn create_test_batch(
         Field::new("price", DataType::Int32, false),
         Field::new("effective_from", DataType::Date32, false),
         Field::new("effective_to", DataType::Date32, false),
-        Field::new("as_of_from", DataType::Date32, false),
-        Field::new("as_of_to", DataType::Date32, false),
+        Field::new("as_of_from", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new("as_of_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("value_hash", DataType::Int64, false),
     ]));
 
@@ -96,6 +100,12 @@ fn extract_date(array: &Date32Array, index: usize) -> NaiveDate {
     let days = array.value(index);
     let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
     epoch + chrono::Duration::days(days as i64)
+}
+
+fn extract_timestamp(array: &TimestampMicrosecondArray, index: usize) -> NaiveDateTime {
+    let microseconds = array.value(index);
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    epoch + chrono::Duration::microseconds(microseconds)
 }
 
 #[test]

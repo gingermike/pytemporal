@@ -1,15 +1,17 @@
 use arrow::array::{
-    Array, ArrayRef, Date32Array, RecordBatch, StringArray, 
+    Array, ArrayRef, Date32Array, TimestampMicrosecondArray, RecordBatch, StringArray, 
     Int32Array, Int64Array, Float64Array, StringBuilder
 };
+use arrow::datatypes::TimeUnit;
 use arrow::datatypes::{DataType, Field, Schema};
-use chrono::{NaiveDate, Days};
+use chrono::{NaiveDate, NaiveDateTime, Days};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use xxhash_rust::xxh64::xxh64;
 use ordered_float;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 struct BitemporalRecord {
@@ -17,14 +19,23 @@ struct BitemporalRecord {
     value_hash: u64,
     effective_from: NaiveDate,
     effective_to: NaiveDate,
-    as_of_from: NaiveDate,
-    as_of_to: NaiveDate,  // No longer optional - use MAX_DATE for infinity
+    as_of_from: NaiveDateTime,
+    as_of_to: NaiveDateTime,  // No longer optional - use MAX_TIMESTAMP for infinity
     original_index: Option<usize>,
 }
 
 // Pandas-compatible max date (pandas can't handle dates beyond ~2262)
 const MAX_DATE: NaiveDate = match NaiveDate::from_ymd_opt(2262, 4, 11) {
     Some(date) => date,
+    None => panic!("Invalid max date"),
+};
+
+// Max timestamp for as_of columns (microsecond precision)
+const MAX_TIMESTAMP: NaiveDateTime = match NaiveDate::from_ymd_opt(2262, 4, 11) {
+    Some(date) => match date.and_hms_opt(23, 59, 59) {
+        Some(datetime) => datetime,
+        None => panic!("Invalid max timestamp"),
+    },
     None => panic!("Invalid max date"),
 };
 
@@ -70,6 +81,10 @@ impl ScalarValue {
                 let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
                 ScalarValue::Date32(arr.value(idx))
             }
+            DataType::Timestamp(_, _) => {
+                let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                ScalarValue::Int64(arr.value(idx))
+            }
             _ => panic!("Unsupported data type: {:?}", array.data_type()),
         }
     }
@@ -84,6 +99,12 @@ pub struct ChangeSet {
 fn extract_date(array: &Date32Array, idx: usize) -> NaiveDate {
     let days_since_epoch = array.value(idx);
     NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + Days::new(days_since_epoch as u64)
+}
+
+fn extract_timestamp(array: &TimestampMicrosecondArray, idx: usize) -> NaiveDateTime {
+    let microseconds_since_epoch = array.value(idx);
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    epoch + chrono::Duration::microseconds(microseconds_since_epoch)
 }
 
 fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[String]) -> u64 {
@@ -126,7 +147,7 @@ pub fn process_updates(
     let eff_to_array = current_state.column_by_name("effective_to").unwrap()
         .as_any().downcast_ref::<Date32Array>().unwrap();
     let as_of_from_array = current_state.column_by_name("as_of_from").unwrap()
-        .as_any().downcast_ref::<Date32Array>().unwrap();
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     
     // Collect current state records
     for row_idx in 0..current_state.num_rows() {
@@ -142,8 +163,8 @@ pub fn process_updates(
             value_hash: hash_values(&current_state, row_idx, &value_columns),
             effective_from: extract_date(eff_from_array, row_idx),
             effective_to: extract_date(eff_to_array, row_idx),
-            as_of_from: extract_date(as_of_from_array, row_idx),
-            as_of_to: MAX_DATE,
+            as_of_from: extract_timestamp(as_of_from_array, row_idx),
+            as_of_to: MAX_TIMESTAMP,
             original_index: Some(row_idx),
         };
         
@@ -155,6 +176,8 @@ pub fn process_updates(
         .as_any().downcast_ref::<Date32Array>().unwrap();
     let upd_eff_to_array = updates.column_by_name("effective_to").unwrap()
         .as_any().downcast_ref::<Date32Array>().unwrap();
+    let upd_as_of_from_array = updates.column_by_name("as_of_from").unwrap()
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     
     for upd_idx in 0..updates.num_rows() {
         let mut upd_id_values = Vec::new();
@@ -169,8 +192,8 @@ pub fn process_updates(
             value_hash: hash_values(&updates, upd_idx, &value_columns),
             effective_from: extract_date(upd_eff_from_array, upd_idx),
             effective_to: extract_date(upd_eff_to_array, upd_idx),
-            as_of_from: system_date,
-            as_of_to: MAX_DATE,
+            as_of_from: extract_timestamp(upd_as_of_from_array, upd_idx),
+            as_of_to: MAX_TIMESTAMP,
             original_index: Some(upd_idx), // Store update index for reference
         };
         
@@ -183,52 +206,46 @@ pub fn process_updates(
         .map(|(id, _)| id.clone())
         .collect();
     
-    // Process each ID group independently
-    for (_id_values, (mut current_records, mut update_records)) in id_groups {
-        // Sort records by effective_from for chronological processing
-        current_records.sort_by_key(|r| r.effective_from);
-        update_records.sort_by_key(|r| r.effective_from);
-        
-        if update_records.is_empty() {
-            // No updates for this ID
-            if update_mode == UpdateMode::FullState {
-                // In full state mode, expire all current records for IDs not in updates
-                for record in current_records {
-                    if let Some(orig_idx) = record.original_index {
-                        to_expire.push(orig_idx);
-                    }
-                }
-            }
-            continue;
-        }
-        
-        if update_mode == UpdateMode::FullState {
-            // In full state mode, expire all current records and insert update records as-is
-            for record in &current_records {
-                if let Some(orig_idx) = record.original_index {
-                    to_expire.push(orig_idx);
-                }
-            }
-            
-            // Insert each update record exactly as provided
-            for update_record in &update_records {
-                let batch = create_record_batch_from_update(
+    // Use parallel processing for large datasets to improve CPU utilization
+    let use_parallel = id_groups.len() > 50 || 
+                      (current_state.num_rows() + updates.num_rows()) > 10000;
+    
+    if use_parallel {
+        // Process ID groups in parallel for large datasets
+        let results: Result<Vec<(Vec<usize>, Vec<RecordBatch>)>, String> = id_groups
+            .into_par_iter()
+            .map(|(_id_values, (mut current_records, mut update_records))| {
+                process_id_group(
+                    current_records,
+                    update_records,
+                    &current_state,
                     &updates,
-                    update_record.original_index.unwrap(),
-                    update_record,
-                )?;
-                to_insert.push(batch);
-            }
-        } else {
-            // Delta mode - use concurrent pointer approach
-            let (expire_indices, insert_batches) = process_id_timeline(
-                &current_records,
-                &update_records,
+                    &id_columns,
+                    &value_columns,
+                    system_date,
+                    update_mode,
+                )
+            })
+            .collect();
+        
+        // Merge parallel results
+        let results = results?;
+        for (expire_indices, insert_batches) in results {
+            to_expire.extend(expire_indices);
+            to_insert.extend(insert_batches);
+        }
+    } else {
+        // Process ID groups serially for small datasets to avoid overhead
+        for (_id_values, (current_records, update_records)) in id_groups {
+            let (expire_indices, insert_batches) = process_id_group(
+                current_records,
+                update_records,
                 &current_state,
                 &updates,
                 &id_columns,
                 &value_columns,
                 system_date,
+                update_mode,
             )?;
             
             to_expire.extend(expire_indices);
@@ -247,6 +264,73 @@ pub fn process_updates(
     to_insert = simple_conflate_batches(to_insert)?;
     
     Ok(ChangeSet { to_expire, to_insert })
+}
+
+// Extract ID group processing logic for reuse in parallel and serial paths
+fn process_id_group(
+    mut current_records: Vec<BitemporalRecord>,
+    mut update_records: Vec<BitemporalRecord>,
+    current_state: &RecordBatch,
+    updates: &RecordBatch,
+    id_columns: &[String],
+    value_columns: &[String],
+    system_date: NaiveDate,
+    update_mode: UpdateMode,
+) -> Result<(Vec<usize>, Vec<RecordBatch>), String> {
+    // Sort records by effective_from for chronological processing
+    current_records.sort_by_key(|r| r.effective_from);
+    update_records.sort_by_key(|r| r.effective_from);
+    
+    let mut expire_indices = Vec::new();
+    let mut insert_batches = Vec::new();
+    
+    if update_records.is_empty() {
+        // No updates for this ID
+        if update_mode == UpdateMode::FullState {
+            // In full state mode, expire all current records for IDs not in updates
+            for record in current_records {
+                if let Some(orig_idx) = record.original_index {
+                    expire_indices.push(orig_idx);
+                }
+            }
+        }
+        return Ok((expire_indices, insert_batches));
+    }
+    
+    if update_mode == UpdateMode::FullState {
+        // In full state mode, expire all current records and insert update records as-is
+        for record in &current_records {
+            if let Some(orig_idx) = record.original_index {
+                expire_indices.push(orig_idx);
+            }
+        }
+        
+        // Insert each update record exactly as provided
+        for update_record in &update_records {
+            let batch = create_record_batch_from_update(
+                updates,
+                update_record.original_index.unwrap(),
+                update_record,
+            )?;
+            insert_batches.push(batch);
+        }
+    } else {
+        // Delta mode - use concurrent pointer approach
+        let (expire_idx, insert_batch) = process_id_timeline(
+            &current_records,
+            &update_records,
+            current_state,
+            updates,
+            id_columns,
+            value_columns,
+            system_date,
+        )?;
+        
+        expire_indices.extend(expire_idx);
+        insert_batches.extend(insert_batch);
+    }
+    
+    Ok((expire_indices, insert_batches))
 }
 
 #[derive(Debug, Clone)]
@@ -463,8 +547,8 @@ fn emit_segment(
         value_hash: record_to_emit.value_hash,
         effective_from: from_date,
         effective_to: to_date,
-        as_of_from: system_date,
-        as_of_to: MAX_DATE,
+        as_of_from: record_to_emit.as_of_from,
+        as_of_to: MAX_TIMESTAMP,
         original_index: None,
     };
 
@@ -694,14 +778,16 @@ fn create_record_batch_from_record(
             builder.append_value(days as i32);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "as_of_from" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.as_of_from - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.as_of_from - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "as_of_to" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.as_of_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.as_of_to - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "value_hash" {
             let mut builder = Int64Array::builder(1);
@@ -741,14 +827,16 @@ fn create_record_batch_from_update(
             builder.append_value(days as i32);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "as_of_from" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.as_of_from - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.as_of_from - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "as_of_to" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.as_of_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.as_of_to - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "value_hash" {
             let mut builder = Int64Array::builder(1);

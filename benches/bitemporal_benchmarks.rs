@@ -1,8 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use bitemporal_timeseries::*;
-use chrono::NaiveDate;
-use arrow::array::{Date32Array, Int32Array, Int64Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use chrono::{NaiveDate, NaiveDateTime};
+use arrow::array::{Date32Array, TimestampMicrosecondArray, Int32Array, Int64Array};
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
@@ -16,8 +16,8 @@ fn create_test_batch(
     let mut price_builder = Int32Array::builder(data.len());
     let mut eff_from_builder = Date32Array::builder(data.len());
     let mut eff_to_builder = Date32Array::builder(data.len());
-    let mut as_of_from_builder = Date32Array::builder(data.len());
-    let mut as_of_to_builder = Date32Array::builder(data.len());
+    let mut as_of_from_builder = TimestampMicrosecondArray::builder(data.len());
+    let mut as_of_to_builder = TimestampMicrosecondArray::builder(data.len());
     let mut value_hash_builder = Int64Array::builder(data.len());
 
     // Constants for date conversion
@@ -48,18 +48,22 @@ fn create_test_batch(
         eff_to_builder.append_value(eff_to_days);
         
         let as_of_from_date = NaiveDate::parse_from_str(as_of_from, "%Y-%m-%d")
-            .map_err(|e| e.to_string())?;
-        let as_of_from_days = (as_of_from_date - epoch).num_days() as i32;
-        as_of_from_builder.append_value(as_of_from_days);
+            .map_err(|e| e.to_string())?
+            .and_hms_opt(0, 0, 0).unwrap();
+        let epoch_datetime = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+        let as_of_from_microseconds = (as_of_from_date - epoch_datetime).num_microseconds().unwrap();
+        as_of_from_builder.append_value(as_of_from_microseconds);
         
         let as_of_to_date = if as_of_to == "max" {
-            MAX_DATE
+            MAX_DATE.and_hms_opt(23, 59, 59).unwrap()
         } else {
             NaiveDate::parse_from_str(as_of_to, "%Y-%m-%d")
                 .map_err(|e| e.to_string())?
+                .and_hms_opt(23, 59, 59).unwrap()
         };
-        let as_of_to_days = (as_of_to_date - epoch).num_days() as i32;
-        as_of_to_builder.append_value(as_of_to_days);
+        let epoch_datetime = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+        let as_of_to_microseconds = (as_of_to_date - epoch_datetime).num_microseconds().unwrap();
+        as_of_to_builder.append_value(as_of_to_microseconds);
         
         value_hash_builder.append_value(0); // Placeholder, will be computed
     }
@@ -71,8 +75,8 @@ fn create_test_batch(
         Field::new("price", DataType::Int32, false),
         Field::new("effective_from", DataType::Date32, false),
         Field::new("effective_to", DataType::Date32, false),
-        Field::new("as_of_from", DataType::Date32, false),
-        Field::new("as_of_to", DataType::Date32, false),
+        Field::new("as_of_from", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new("as_of_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("value_hash", DataType::Int64, false),
     ]));
 
@@ -264,11 +268,77 @@ fn bench_scaling_by_size(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_parallel_effectiveness(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parallel_effectiveness");
+    
+    // Test scenarios with different ID distributions
+    for (scenario, num_ids, records_per_id) in [
+        ("few_ids_many_records", 10, 1000),    // Low parallelism
+        ("many_ids_few_records", 1000, 10),    // High parallelism  
+        ("balanced_workload", 100, 100),       // Balanced
+    ].iter() {
+        let mut current_data = Vec::new();
+        let mut update_data = Vec::new();
+        
+        // Create test data with specified ID distribution
+        for id in 0..*num_ids {
+            for record in 0..*records_per_id {
+                current_data.push((
+                    id,
+                    "field",
+                    100 + record,
+                    1000 + record,
+                    "2024-01-01",
+                    "2024-12-31",
+                    "2024-01-01",
+                    "max"
+                ));
+            }
+            
+            // Add some updates for each ID
+            for update in 0..(*records_per_id / 10).max(1) {
+                update_data.push((
+                    id,
+                    "field", 
+                    999 + update,
+                    9999 + update,
+                    "2024-06-01",
+                    "2024-08-01",
+                    "2024-07-21",
+                    "max"
+                ));
+            }
+        }
+
+        let current_state = create_test_batch(current_data).unwrap();
+        let updates = create_test_batch(update_data).unwrap();
+
+        let system_date = NaiveDate::from_ymd_opt(2024, 7, 21).unwrap();
+        let id_columns = vec!["id".to_string(), "field".to_string()];
+        let value_columns = vec!["mv".to_string(), "price".to_string()];
+
+        group.bench_with_input(BenchmarkId::new("scenario", scenario), scenario, |b, _scenario| {
+            b.iter(|| {
+                black_box(process_updates(
+                    black_box(current_state.clone()),
+                    black_box(updates.clone()),
+                    black_box(id_columns.clone()),
+                    black_box(value_columns.clone()),
+                    black_box(system_date),
+                    black_box(UpdateMode::Delta),
+                ).unwrap())
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches, 
     bench_small_dataset, 
     bench_medium_dataset, 
     bench_conflation_effectiveness,
-    bench_scaling_by_size
+    bench_scaling_by_size,
+    bench_parallel_effectiveness
 );
 criterion_main!(benches);

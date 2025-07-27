@@ -69,6 +69,10 @@ class BitemporalTimeseriesProcessor:
         current_batch = pa.RecordBatch.from_pandas(current_state)
         updates_batch = pa.RecordBatch.from_pandas(updates)
         
+        # Convert as_of timestamp columns from nanoseconds to microseconds for Rust compatibility
+        current_batch = self._convert_timestamps_to_microseconds(current_batch)
+        updates_batch = self._convert_timestamps_to_microseconds(updates_batch)
+        
         # Call Rust function
         expire_indices, insert_batch = _compute_changes(
             current_batch,
@@ -122,8 +126,11 @@ class BitemporalTimeseriesProcessor:
         df = df.copy()
         
         # Convert PostgreSQL infinity to pandas max timestamp for internal processing
-        date_columns = ['effective_from', 'effective_to', 'as_of_from', 'as_of_to']
-        for col in date_columns:
+        effective_date_columns = ['effective_from', 'effective_to']
+        as_of_timestamp_columns = ['as_of_from', 'as_of_to']
+        
+        # Handle effective date columns (convert to dates)
+        for col in effective_date_columns:
             if col in df.columns:
                 # Replace null with pandas max timestamp
                 df[col] = df[col].fillna(PANDAS_MAX_TIMESTAMP)
@@ -131,8 +138,20 @@ class BitemporalTimeseriesProcessor:
                 df[col] = pd.to_datetime(df[col])
                 df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
                 
-                # Convert to date for processing
+                # Convert to date for processing (date precision only)
                 df[col] = df[col].dt.date
+        
+        # Handle as_of timestamp columns (preserve timestamp precision)
+        for col in as_of_timestamp_columns:
+            if col in df.columns:
+                # Replace null with pandas max timestamp
+                df[col] = df[col].fillna(PANDAS_MAX_TIMESTAMP)
+                # Replace PostgreSQL infinity with pandas max timestamp
+                df[col] = pd.to_datetime(df[col])
+                df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
+                
+                # Keep as timestamp for microsecond precision
+                # Note: pandas uses nanosecond precision, which is compatible with Arrow timestamp[ns]
         
         # Add value_hash column if it doesn't exist (it will be computed by Rust)
         if 'value_hash' not in df.columns:
@@ -140,17 +159,67 @@ class BitemporalTimeseriesProcessor:
         
         return df
     
+    def _convert_timestamps_to_microseconds(self, batch: pa.RecordBatch) -> pa.RecordBatch:
+        """
+        Convert as_of timestamp columns from nanoseconds to microseconds for Rust compatibility.
+        """
+        schema = batch.schema
+        columns = []
+        
+        for i, field in enumerate(schema):
+            column = batch.column(i)
+            
+            # Convert as_of timestamp columns from ns to us
+            if field.name in ['as_of_from', 'as_of_to'] and pa.types.is_timestamp(field.type):
+                if field.type.unit == 'ns':
+                    # Handle pandas max timestamp which is too large for microseconds
+                    # Cast with safe conversion that truncates nanoseconds
+                    try:
+                        column = column.cast(pa.timestamp('us'))
+                    except pa.ArrowInvalid:
+                        # If casting fails due to overflow, manually convert
+                        # This happens with pd.Timestamp.max
+                        np_array = column.to_pandas().values
+                        # Convert to microseconds by dividing nanoseconds by 1000
+                        us_values = np_array.astype('datetime64[us]')
+                        column = pa.array(us_values, type=pa.timestamp('us'))
+            
+            columns.append(column)
+        
+        # Create new schema with updated timestamp types
+        new_fields = []
+        for field in schema:
+            if field.name in ['as_of_from', 'as_of_to'] and pa.types.is_timestamp(field.type):
+                new_fields.append(pa.field(field.name, pa.timestamp('us'), field.nullable))
+            else:
+                new_fields.append(field)
+        
+        new_schema = pa.schema(new_fields)
+        return pa.RecordBatch.from_arrays(columns, schema=new_schema)
+    
     def _convert_from_internal_format(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Convert from internal format back to PostgreSQL format.
         """
         df = df.copy()
         
-        # Convert dates back to timestamps
-        date_columns = ['effective_from', 'effective_to', 'as_of_from', 'as_of_to']
-        for col in date_columns:
+        # Convert dates back to timestamps - handle effective and as_of columns differently
+        effective_date_columns = ['effective_from', 'effective_to']
+        as_of_timestamp_columns = ['as_of_from', 'as_of_to']
+        
+        # Convert effective date columns 
+        for col in effective_date_columns:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col])
+        
+        # Convert as_of timestamp columns more carefully to preserve precision
+        for col in as_of_timestamp_columns:
+            if col in df.columns:
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except (pd.errors.OutOfBoundsDatetime, OverflowError):
+                    # If conversion fails, it's likely the max timestamp, handle below
+                    pass
         
         # Convert pandas max timestamp back to PostgreSQL infinity for unbounded dates
         unbounded_columns = ['effective_to', 'as_of_to']
