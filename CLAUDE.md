@@ -67,9 +67,11 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **Project Organization**: Separated tests, benchmarks, and core algorithm into appropriate files
 
 ## Gitea CI/CD
-- Ready for Linux wheel building with cross-compilation (x86_64, aarch64)
-- Example workflows provided for Gitea Actions
-- Package registry publishing configured for internal repositories
+- **Workflow**: `.gitea/workflows/build-wheels.yml` - Complete Linux wheel building and publishing
+- **Architectures**: x86_64 and aarch64 cross-compilation support
+- **Publishing**: Automatic publishing to Gitea package registry on version tags
+- **Setup Guide**: `docs/gitea-publishing.md` - Complete configuration instructions
+- **Triggers**: Version tags (`v1.0.0`) and manual workflow dispatch
 
 ## Notes
 - Algorithm is deterministic and thread-safe when processing different ID groups
@@ -85,5 +87,6 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-07-27**: Fixed Python wrapper to preserve exact timestamps from input through processing  
 - **2025-07-27**: Updated all tests and benchmarks to use proper timestamp schemas
 - **2025-07-27**: Fixed infinity handling to use `2260-12-31 23:59:59` instead of NaT for clear debugging
+- **2025-07-27**: Added complete Gitea Actions workflow for Linux wheel building and publishing
 
 This file should be updated whenever a new piece of context or information is added / discovered in this project
