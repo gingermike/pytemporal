@@ -14,8 +14,8 @@ from datetime import datetime
 # Import the Rust compute_changes function
 from .bitemporal_timeseries import compute_changes as _compute_changes
 
-# PostgreSQL infinity date representation
-POSTGRES_INFINITY = pd.Timestamp('9999-12-31 23:59:59')
+# PostgreSQL infinity date representation - use a safe date that doesn't overflow pandas
+POSTGRES_INFINITY = pd.Timestamp('2260-12-31 23:59:59')
 
 # Pandas maximum timestamp (approximately 2262-04-11)
 PANDAS_MAX_TIMESTAMP = pd.Timestamp.max
@@ -227,17 +227,26 @@ class BitemporalTimeseriesProcessor:
             if col in df.columns:
                 # Handle dates that are beyond pandas range or at the max value
                 try:
-                    # Convert to datetime first in case they're coming as strings or other types
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
-                    # Any date beyond 2262 is treated as infinity
-                    # Use a safer comparison to avoid overflow issues
-                    mask = df[col].dt.year >= 2262
-                    if mask.any():
-                        # Convert column to object to allow mixed types (datetime and string)
-                        df[col] = df[col].astype(object)
-                        df.loc[mask, col] = POSTGRES_INFINITY
-                except (pd.errors.OutOfBoundsDatetime, OverflowError):
-                    # If conversion fails due to overflow, assume it's infinity
+                    # First, check if we already have datetime values
+                    if not pd.api.types.is_datetime64_any_dtype(df[col]):
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                    
+                    # Create mask for infinity detection:
+                    # 1. NaT values (result of overflow during conversion)
+                    # 2. Dates beyond 2262 (near pandas max)
+                    # 3. Dates exactly equal to pandas max
+                    is_nat_mask = pd.isna(df[col])
+                    is_large_date_mask = df[col].dt.year >= 2262
+                    is_max_timestamp_mask = df[col] >= pd.Timestamp('2262-04-01')
+                    
+                    infinity_mask = is_nat_mask | is_large_date_mask | is_max_timestamp_mask
+                    
+                    if infinity_mask.any():
+                        # Replace infinity values with PostgreSQL infinity date
+                        df.loc[infinity_mask, col] = POSTGRES_INFINITY
+                        
+                except (pd.errors.OutOfBoundsDatetime, OverflowError, AttributeError):
+                    # If any conversion fails due to overflow, assume entire column needs infinity
                     df[col] = POSTGRES_INFINITY
         
         return df

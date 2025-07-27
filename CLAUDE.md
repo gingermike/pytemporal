@@ -78,10 +78,12 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - Benchmarks show excellent scaling characteristics with parallelization
 - **Timestamp Precision**: as_of columns preserve microsecond precision through the entire pipeline (Python → Arrow → Rust → Arrow → Python)
 - **Python Conversion**: Automatic handling of pandas timestamp[ns] → Arrow timestamp[us] conversion for Rust compatibility
+- **Infinity Handling**: Uses `2260-12-31 23:59:59` as infinity representation (avoids NaT, maintains datetime type, overflow-safe)
 
 ## Recent Updates
 - **2025-07-27**: Implemented microsecond timestamp precision for as_of_from/as_of_to columns
-- **2025-07-27**: Fixed Python wrapper to preserve exact timestamps from input through processing
+- **2025-07-27**: Fixed Python wrapper to preserve exact timestamps from input through processing  
 - **2025-07-27**: Updated all tests and benchmarks to use proper timestamp schemas
+- **2025-07-27**: Fixed infinity handling to use `2260-12-31 23:59:59` instead of NaT for clear debugging
 
 This file should be updated whenever a new piece of context or information is added / discovered in this project
