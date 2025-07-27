@@ -13,9 +13,16 @@ rayon = "1.8"
 indexmap = "2.1"
 ordered-float = "4.2"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
 [lib]
 name = "bitemporal_timeseries"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [profile.release]
 lto = true
+
+[[bench]]
+name = "bitemporal_benchmarks"
+harness = false
