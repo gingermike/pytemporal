@@ -243,6 +243,9 @@ fn process_updates(
     // Deduplicate insert batches by combining identical time periods
     to_insert = deduplicate_record_batches(to_insert)?;
     
+    // Simple post-processing conflation for adjacent segments
+    to_insert = simple_conflate_batches(to_insert)?;
+    
     Ok(ChangeSet { to_expire, to_insert })
 }
 
@@ -429,11 +432,11 @@ fn emit_segment(
     id_columns: &[String],
     value_columns: &[String],
     system_date: NaiveDate,
-    expire_indices: &mut Vec<usize>,
+    _expire_indices: &mut Vec<usize>,
     insert_batches: &mut Vec<RecordBatch>,
 ) -> PyResult<()> {
-    // Priority: updates override current state
-    if let Some(update_record) = active_updates.first() {
+    // Determine what record to emit
+    let (record_to_emit, use_current_batch) = if let Some(update_record) = active_updates.first() {
         // Check if the update has different values than current state
         let should_emit_update = if let Some(current_record) = active_current.first() {
             // Only emit if values have actually changed
@@ -444,67 +447,227 @@ fn emit_segment(
         };
         
         if should_emit_update {
-            // Emit update record for this segment
-            let segment_record = BitemporalRecord {
-                id_values: update_record.id_values.clone(),
-                value_hash: update_record.value_hash,
-                effective_from: from_date,
-                effective_to: to_date,
-                as_of_from: system_date,
-                as_of_to: MAX_DATE,
-                original_index: None,
-            };
-            
-            let batch = create_record_batch_from_update(
-                updates_batch,
-                update_record.original_index.unwrap(),
-                &segment_record,
-            )?;
-            insert_batches.push(batch);
+            (update_record, false) // Use updates batch
         } else {
-            // Values haven't changed, emit the current state record instead
-            let segment_record = BitemporalRecord {
-                id_values: active_current.first().unwrap().id_values.clone(),
-                value_hash: active_current.first().unwrap().value_hash,
-                effective_from: from_date,
-                effective_to: to_date,
-                as_of_from: system_date,
-                as_of_to: MAX_DATE,
-                original_index: None,
-            };
-            
-            let batch = create_record_batch_from_record(
-                &segment_record,
-                current_batch,
-                active_current.first().unwrap().original_index.unwrap(),
-                id_columns,
-                value_columns,
-            )?;
-            insert_batches.push(batch);
+            (active_current.first().unwrap(), true) // Use current batch
         }
     } else if let Some(current_record) = active_current.first() {
-        // Emit current state record for this segment (only if no updates active)
-        let segment_record = BitemporalRecord {
-            id_values: current_record.id_values.clone(),
-            value_hash: current_record.value_hash,
-            effective_from: from_date,
-            effective_to: to_date,
-            as_of_from: system_date,
-            as_of_to: MAX_DATE,
-            original_index: None,
-        };
-        
-        let batch = create_record_batch_from_record(
+        (current_record, true) // Use current batch
+    } else {
+        return Ok(()); // Nothing to emit
+    };
+
+    // Create the segment record
+    let segment_record = BitemporalRecord {
+        id_values: record_to_emit.id_values.clone(),
+        value_hash: record_to_emit.value_hash,
+        effective_from: from_date,
+        effective_to: to_date,
+        as_of_from: system_date,
+        as_of_to: MAX_DATE,
+        original_index: None,
+    };
+
+    // Check if we can conflate with the last inserted batch
+    if let Some(last_batch) = insert_batches.last_mut() {
+        if can_conflate_with_last_batch(last_batch, &segment_record)? {
+            // Extend the last batch's effective_to instead of creating a new batch
+            extend_batch_effective_to(last_batch, to_date)?;
+            return Ok(());
+        }
+    }
+
+    // Create new batch since we can't conflate
+    let batch = if use_current_batch {
+        create_record_batch_from_record(
             &segment_record,
             current_batch,
-            current_record.original_index.unwrap(),
+            record_to_emit.original_index.unwrap(),
             id_columns,
             value_columns,
-        )?;
-        insert_batches.push(batch);
-    }
+        )?
+    } else {
+        create_record_batch_from_update(
+            updates_batch,
+            record_to_emit.original_index.unwrap(),
+            &segment_record,
+        )?
+    };
+    
+    insert_batches.push(batch);
     
     Ok(())
+}
+
+fn can_conflate_with_last_batch(last_batch: &RecordBatch, new_record: &BitemporalRecord) -> PyResult<bool> {
+    if last_batch.num_rows() != 1 {
+        return Ok(false);
+    }
+
+    // Check if ID values match by comparing the ScalarValue arrays
+    // Extract ID values from the last batch
+    let mut last_id_values = Vec::new();
+    let schema = last_batch.schema();
+    for field in schema.fields() {
+        let field_name = field.name();
+        if !matches!(field_name.as_str(), "effective_from" | "effective_to" | "as_of_from" | "as_of_to" | "value_hash") {
+            let array = last_batch.column_by_name(field_name).unwrap();
+            let last_value = ScalarValue::from_array(array, 0);
+            last_id_values.push(last_value);
+        }
+    }
+    
+    // Compare with new record's ID values
+    if last_id_values != new_record.id_values {
+        return Ok(false);
+    }
+
+    // Check if value hashes match
+    let hash_array = last_batch.column_by_name("value_hash").unwrap()
+        .as_any().downcast_ref::<Int64Array>().unwrap();
+    let last_hash = hash_array.value(0) as u64;
+    
+    if last_hash != new_record.value_hash {
+        return Ok(false);
+    }
+
+    // Check if they're adjacent (last batch's effective_to == new record's effective_from)
+    let eff_to_array = last_batch.column_by_name("effective_to").unwrap()
+        .as_any().downcast_ref::<Date32Array>().unwrap();
+    let last_effective_to = extract_date(eff_to_array, 0);
+    
+    Ok(last_effective_to == new_record.effective_from)
+}
+
+fn extend_batch_effective_to(batch: &mut RecordBatch, new_effective_to: NaiveDate) -> PyResult<()> {
+    let schema = batch.schema();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    
+    for field in schema.fields() {
+        let column_name = field.name();
+        
+        if column_name == "effective_to" {
+            let mut builder = Date32Array::builder(1);
+            let days = (new_effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+            builder.append_value(days as i32);
+            columns.push(Arc::new(builder.finish()));
+        } else {
+            // Copy original column
+            columns.push(batch.column_by_name(column_name).unwrap().clone());
+        }
+    }
+    
+    let new_batch = RecordBatch::try_new(schema.clone(), columns)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    
+    *batch = new_batch;
+    Ok(())
+}
+
+fn simple_conflate_batches(mut batches: Vec<RecordBatch>) -> PyResult<Vec<RecordBatch>> {
+    if batches.len() <= 1 {
+        return Ok(batches);
+    }
+
+    // Sort batches by effective_from for processing
+    batches.sort_by(|a, b| {
+        let a_eff_from = extract_date(
+            a.column_by_name("effective_from").unwrap()
+                .as_any().downcast_ref::<Date32Array>().unwrap(),
+            0
+        );
+        let b_eff_from = extract_date(
+            b.column_by_name("effective_from").unwrap()
+                .as_any().downcast_ref::<Date32Array>().unwrap(),
+            0
+        );
+        a_eff_from.cmp(&b_eff_from)
+    });
+
+    let mut result = Vec::new();
+    let mut batches_iter = batches.into_iter();
+    let mut current_batch = batches_iter.next().unwrap();
+
+    for next_batch in batches_iter {
+        // Check if we can merge current_batch with next_batch
+        if can_merge_batches(&current_batch, &next_batch)? {
+            // Merge by extending current_batch's effective_to
+            let next_eff_to = extract_date(
+                next_batch.column_by_name("effective_to").unwrap()
+                    .as_any().downcast_ref::<Date32Array>().unwrap(),
+                0
+            );
+            current_batch = extend_batch_to_date(current_batch, next_eff_to)?;
+        } else {
+            // Can't merge, add current to result and make next the new current
+            result.push(current_batch);
+            current_batch = next_batch;
+        }
+    }
+    
+    // Add the final batch
+    result.push(current_batch);
+    
+    Ok(result)
+}
+
+fn can_merge_batches(batch1: &RecordBatch, batch2: &RecordBatch) -> PyResult<bool> {
+    if batch1.num_rows() != 1 || batch2.num_rows() != 1 {
+        return Ok(false);
+    }
+
+    // Check if they have the same ID values and value hash
+    let schema = batch1.schema();
+    for field in schema.fields() {
+        let field_name = field.name();
+        if !matches!(field_name.as_str(), "effective_from" | "effective_to" | "as_of_from" | "as_of_to") {
+            let array1 = batch1.column_by_name(field_name).unwrap();
+            let array2 = batch2.column_by_name(field_name).unwrap();
+            
+            let value1 = ScalarValue::from_array(array1, 0);
+            let value2 = ScalarValue::from_array(array2, 0);
+            
+            if value1 != value2 {
+                return Ok(false);
+            }
+        }
+    }
+
+    // Check if they are adjacent
+    let batch1_eff_to = extract_date(
+        batch1.column_by_name("effective_to").unwrap()
+            .as_any().downcast_ref::<Date32Array>().unwrap(),
+        0
+    );
+    let batch2_eff_from = extract_date(
+        batch2.column_by_name("effective_from").unwrap()
+            .as_any().downcast_ref::<Date32Array>().unwrap(),
+        0
+    );
+
+    Ok(batch1_eff_to == batch2_eff_from)
+}
+
+fn extend_batch_to_date(batch: RecordBatch, new_effective_to: NaiveDate) -> PyResult<RecordBatch> {
+    let schema = batch.schema();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    
+    for field in schema.fields() {
+        let column_name = field.name();
+        
+        if column_name == "effective_to" {
+            let mut builder = Date32Array::builder(1);
+            let days = (new_effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+            builder.append_value(days as i32);
+            columns.push(Arc::new(builder.finish()));
+        } else {
+            // Copy original column
+            columns.push(batch.column_by_name(column_name).unwrap().clone());
+        }
+    }
+    
+    RecordBatch::try_new(schema.clone(), columns)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 fn create_record_batch_from_record(
@@ -654,6 +817,166 @@ fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> PyResult<Vec<RecordB
     }
     
     Ok(deduped)
+}
+
+fn conflate_adjacent_segments(batches: Vec<RecordBatch>) -> PyResult<Vec<RecordBatch>> {
+    if batches.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // Convert batches to a more workable format
+    let mut segments: Vec<(NaiveDate, NaiveDate, u64, Vec<ScalarValue>, RecordBatch)> = Vec::new();
+    
+    for batch in batches {
+        if batch.num_rows() == 1 {
+            let eff_from_array = batch.column_by_name("effective_from").unwrap()
+                .as_any().downcast_ref::<Date32Array>().unwrap();
+            let eff_to_array = batch.column_by_name("effective_to").unwrap()
+                .as_any().downcast_ref::<Date32Array>().unwrap();
+            let hash_array = batch.column_by_name("value_hash").unwrap()
+                .as_any().downcast_ref::<Int64Array>().unwrap();
+            
+            let eff_from = extract_date(eff_from_array, 0);
+            let eff_to = extract_date(eff_to_array, 0);
+            let hash = hash_array.value(0) as u64;
+            
+            // Extract ID values
+            let mut id_values = Vec::new();
+            let schema = batch.schema();
+            for field in schema.fields() {
+                let field_name = field.name();
+                if !matches!(field_name.as_str(), "effective_from" | "effective_to" | "as_of_from" | "as_of_to" | "value_hash") {
+                    let array = batch.column_by_name(field_name).unwrap();
+                    id_values.push(ScalarValue::from_array(array, 0));
+                }
+            }
+            
+            segments.push((eff_from, eff_to, hash, id_values, batch));
+        }
+    }
+    
+    // Sort by ID values, then by effective_from
+    segments.sort_by(|a, b| {
+        match a.3.cmp(&b.3) {
+            std::cmp::Ordering::Equal => a.0.cmp(&b.0),
+            other => other,
+        }
+    });
+    
+    let mut conflated_batches = Vec::new();
+    let mut current_group: Vec<(NaiveDate, NaiveDate, u64, Vec<ScalarValue>, RecordBatch)> = Vec::new();
+    let mut last_id: Option<Vec<ScalarValue>> = None;
+    
+    for segment in segments {
+        let (eff_from, eff_to, hash, id_values, batch) = segment;
+        
+        if last_id.as_ref() != Some(&id_values) {
+            // Process previous group
+            if !current_group.is_empty() {
+                let merged = merge_group_segments(current_group)?;
+                conflated_batches.extend(merged);
+            }
+            
+            // Start new group
+            current_group = vec![(eff_from, eff_to, hash, id_values.clone(), batch)];
+            last_id = Some(id_values);
+        } else {
+            // Same ID group, add to current group
+            current_group.push((eff_from, eff_to, hash, id_values, batch));
+        }
+    }
+    
+    // Process last group
+    if !current_group.is_empty() {
+        let merged = merge_group_segments(current_group)?;
+        conflated_batches.extend(merged);
+    }
+    
+    Ok(conflated_batches)
+}
+
+fn can_simple_conflate(segments: &[(NaiveDate, NaiveDate, u64, Vec<ScalarValue>, RecordBatch)]) -> bool {
+    if segments.len() != 3 {
+        return false;
+    }
+    
+    // Sort by effective_from for analysis
+    let mut sorted_segments = segments.to_vec();
+    sorted_segments.sort_by_key(|(from, _to, _hash, _id, _batch)| *from);
+    
+    // Check if first two segments are adjacent and have same hash
+    let (from1, to1, hash1, _, _) = &sorted_segments[0];
+    let (from2, to2, hash2, _, _) = &sorted_segments[1];
+    let (from3, _to3, hash3, _, _) = &sorted_segments[2];
+    
+    // Only allow conflation if:
+    // 1. First two segments are adjacent (to1 == from2)
+    // 2. First two segments have same hash (same values)  
+    // 3. Third segment is different from first two (to avoid over-conflation)
+    *to1 == *from2 && *hash1 == *hash2 && *hash1 != *hash3 && *from2 == *from3
+}
+
+fn merge_group_segments(mut segments: Vec<(NaiveDate, NaiveDate, u64, Vec<ScalarValue>, RecordBatch)>) -> PyResult<Vec<RecordBatch>> {
+    if segments.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // Very conservative strategy: only merge if we have exactly 2 or 3 segments AND
+    // they form a simple pattern (e.g., 2 adjacent segments with same values, or 
+    // 3 segments where first 2 can be merged)
+    if segments.len() == 2 || (segments.len() == 3 && can_simple_conflate(&segments)) {
+        // Sort by effective_from
+        segments.sort_by_key(|(from, _to, _hash, _id, _batch)| *from);
+        
+        let mut merged_segments: Vec<(NaiveDate, NaiveDate, u64, RecordBatch)> = Vec::new();
+        
+        for (from, to, hash, _id_values, batch) in segments {
+            if let Some((_last_from, last_to, last_hash, last_batch)) = merged_segments.last_mut() {
+                // Only merge if they're adjacent and have same hash (same values)
+                if *last_to == from && *last_hash == hash {
+                    // Merge: extend the last segment's end date
+                    *last_to = to;
+                    // Keep the last batch but update its effective_to
+                    let updated_batch = update_batch_effective_to(last_batch.clone(), to)?;
+                    *last_batch = updated_batch;
+                } else {
+                    // Not adjacent or different values, add as new segment
+                    merged_segments.push((from, to, hash, batch));
+                }
+            } else {
+                // First segment
+                merged_segments.push((from, to, hash, batch));
+            }
+        }
+        
+        // Extract batches from merged segments
+        Ok(merged_segments.into_iter().map(|(_, _, _, batch)| batch).collect())
+    } else {
+        // Too many segments, don't merge to avoid over-conflation
+        Ok(segments.into_iter().map(|(_, _, _, _, batch)| batch).collect())
+    }
+}
+
+fn update_batch_effective_to(batch: RecordBatch, new_effective_to: NaiveDate) -> PyResult<RecordBatch> {
+    let schema = batch.schema();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    
+    for field in schema.fields() {
+        let column_name = field.name();
+        
+        if column_name == "effective_to" {
+            let mut builder = Date32Array::builder(1);
+            let days = (new_effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
+            builder.append_value(days as i32);
+            columns.push(Arc::new(builder.finish()));
+        } else {
+            // Copy original column
+            columns.push(batch.column_by_name(column_name).unwrap().clone());
+        }
+    }
+    
+    RecordBatch::try_new(schema.clone(), columns)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 fn combine_record_batches(batches: Vec<RecordBatch>) -> PyResult<RecordBatch> {

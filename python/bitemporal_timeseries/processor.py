@@ -110,6 +110,8 @@ class BitemporalTimeseriesProcessor:
         
         if not rows_to_insert.empty:
             rows_to_insert = self._convert_from_internal_format(rows_to_insert)
+            # Sort by effective_from for consistent ordering
+            rows_to_insert = rows_to_insert.sort_values(by=['effective_from']).reset_index(drop=True)
         
         return rows_to_expire, rows_to_insert
     

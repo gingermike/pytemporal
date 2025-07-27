@@ -301,22 +301,19 @@ class TestBitemporalTimeseries(unittest.TestCase):
         # Should expire all 3 original rows regardless of order
         self.assertEqual(len(to_expire), 3)
         
-        # Should create 5 segments:
-        # 1. Jan-Mar (100)
-        # 2. Mar-Apr (999) 
-        # 3. Apr-Aug (999)
-        # 4. Aug-Sep (999)
-        # 5. Sep-Dec (300)
-        self.assertEqual(len(to_insert), 5)
+        # Should create 3 segments with conflation:
+        # 1. Jan-Mar (100, 1000)
+        # 2. Mar-Sep (999, 9999) - conflated from original segments 2,3,4 with same values
+        # 3. Sep-Dec (300, 3000)
+        # Note: Adjacent segments with same values are now conflated for efficiency
+        self.assertEqual(len(to_insert), 3)
         
         # Verify segments are in correct order
         insert_sorted = to_insert.sort_values('effective_from').reset_index(drop=True)
         
         expected = [
             ('2024-01-01', '2024-03-01', 100),
-            ('2024-03-01', '2024-04-01', 999),
-            ('2024-04-01', '2024-08-01', 999),
-            ('2024-08-01', '2024-09-01', 999),
+            ('2024-03-01', '2024-09-01', 999),  # Conflated segment
             ('2024-09-01', '2024-12-31', 300)
         ]
         
