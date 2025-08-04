@@ -9,7 +9,7 @@ PostgreSQL's infinity representation (9999-12-31) when outputting data.
 import pyarrow as pa
 import pandas as pd
 from typing import List, Tuple, Optional, Literal
-from datetime import datetime
+from datetime import datetime, date
 
 # Import the Rust compute_changes function
 from .bitemporal_timeseries import compute_changes as _compute_changes
@@ -44,7 +44,7 @@ class BitemporalTimeseriesProcessor:
         self, 
         current_state: pd.DataFrame, 
         updates: pd.DataFrame,
-        system_date: Optional[str] = datetime.today().strftime('%Y-%m-%d'),
+        system_date: Optional[str] = None,
         update_mode: Literal["delta", "full_state"] = "delta"
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -69,23 +69,25 @@ class BitemporalTimeseriesProcessor:
         current_batch = pa.RecordBatch.from_pandas(current_state)
         updates_batch = pa.RecordBatch.from_pandas(updates)
         
-        # Convert as_of timestamp columns from nanoseconds to microseconds for Rust compatibility
+        # Convert timestamp columns from nanoseconds to microseconds for Rust compatibility
         current_batch = self._convert_timestamps_to_microseconds(current_batch)
         updates_batch = self._convert_timestamps_to_microseconds(updates_batch)
         
         # Call Rust function
+        actual_system_date = system_date or datetime.now().strftime('%Y-%m-%d')
         expire_indices, insert_batch = _compute_changes(
             current_batch,
             updates_batch,
             self.id_columns,
             self.value_columns,
-            system_date,
+            actual_system_date,
             update_mode
         )
         
         # Extract rows to expire from original DataFrame
         rows_to_expire = current_state.iloc[expire_indices].copy()
-        rows_to_expire['as_of_to'] = system_date or pd.Timestamp.now().strftime('%Y-%m-%d')
+        # Set as_of_to to current timestamp (when expiring the row)
+        rows_to_expire['as_of_to'] = pd.Timestamp.now()
         
         # Convert insert batches back to pandas and combine them
         if insert_batch:
@@ -103,6 +105,7 @@ class BitemporalTimeseriesProcessor:
                     # Convert column to Python list
                     # arro3 columns have to_pylist method
                     col_data = column.to_pylist()
+                    
                     data[col_name] = col_data
                 
                 insert_dfs.append(pd.DataFrame(data))
@@ -138,8 +141,7 @@ class BitemporalTimeseriesProcessor:
                 df[col] = pd.to_datetime(df[col])
                 df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
                 
-                # Convert to date for processing (date precision only)
-                df[col] = df[col].dt.date
+                # Keep as timestamp for processing (timestamp precision)
         
         # Handle as_of timestamp columns (preserve timestamp precision)
         for col in as_of_timestamp_columns:
@@ -161,7 +163,8 @@ class BitemporalTimeseriesProcessor:
     
     def _convert_timestamps_to_microseconds(self, batch: pa.RecordBatch) -> pa.RecordBatch:
         """
-        Convert as_of timestamp columns from nanoseconds to microseconds for Rust compatibility.
+        Convert timestamp columns to microseconds for Rust compatibility.
+        Also convert effective_from/effective_to from Date32 to Timestamp.
         """
         schema = batch.schema
         columns = []
@@ -184,12 +187,33 @@ class BitemporalTimeseriesProcessor:
                         us_values = np_array.astype('datetime64[us]')
                         column = pa.array(us_values, type=pa.timestamp('us'))
             
+            # Convert effective timestamp columns from ns to us
+            elif field.name in ['effective_from', 'effective_to'] and pa.types.is_timestamp(field.type):
+                if field.type.unit == 'ns':
+                    # Convert nanosecond timestamps to microsecond timestamps
+                    try:
+                        column = column.cast(pa.timestamp('us'))
+                    except pa.ArrowInvalid:
+                        # If casting fails due to overflow, manually convert
+                        np_array = column.to_pandas().values
+                        us_values = np_array.astype('datetime64[us]')
+                        column = pa.array(us_values, type=pa.timestamp('us'))
+            
+            # Convert effective date columns from Date32 to Timestamp  
+            elif field.name in ['effective_from', 'effective_to'] and pa.types.is_date32(field.type):
+                # Convert Date32 to Timestamp (midnight for date-only values)
+                pandas_series = column.to_pandas()
+                timestamp_series = pd.to_datetime(pandas_series)
+                column = pa.array(timestamp_series, type=pa.timestamp('us'))
+            
             columns.append(column)
         
         # Create new schema with updated timestamp types
         new_fields = []
         for field in schema:
-            if field.name in ['as_of_from', 'as_of_to'] and pa.types.is_timestamp(field.type):
+            if field.name in ['as_of_from', 'as_of_to', 'effective_from', 'effective_to'] and pa.types.is_timestamp(field.type):
+                new_fields.append(pa.field(field.name, pa.timestamp('us'), field.nullable))
+            elif field.name in ['effective_from', 'effective_to'] and pa.types.is_date32(field.type):
                 new_fields.append(pa.field(field.name, pa.timestamp('us'), field.nullable))
             else:
                 new_fields.append(field)
@@ -207,9 +231,17 @@ class BitemporalTimeseriesProcessor:
         effective_date_columns = ['effective_from', 'effective_to']
         as_of_timestamp_columns = ['as_of_from', 'as_of_to']
         
-        # Convert effective date columns 
+        # Convert effective date columns - force datetime.date objects to datetime
         for col in effective_date_columns:
             if col in df.columns:
+                # Handle the case where Arrow returns date objects instead of timestamps
+                def convert_to_datetime(val):
+                    if isinstance(val, date) and not isinstance(val, datetime):
+                        # Convert date to datetime at midnight
+                        return datetime.combine(val, datetime.min.time())
+                    return val
+                
+                df[col] = df[col].apply(convert_to_datetime)
                 df[col] = pd.to_datetime(df[col])
         
         # Convert as_of timestamp columns more carefully to preserve precision

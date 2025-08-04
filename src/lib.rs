@@ -17,16 +17,19 @@ use rayon::prelude::*;
 struct BitemporalRecord {
     id_values: Vec<ScalarValue>,
     value_hash: u64,
-    effective_from: NaiveDate,
-    effective_to: NaiveDate,
+    effective_from: NaiveDateTime,
+    effective_to: NaiveDateTime,
     as_of_from: NaiveDateTime,
     as_of_to: NaiveDateTime,  // No longer optional - use MAX_TIMESTAMP for infinity
     original_index: Option<usize>,
 }
 
-// Pandas-compatible max date (pandas can't handle dates beyond ~2262)
-const MAX_DATE: NaiveDate = match NaiveDate::from_ymd_opt(2262, 4, 11) {
-    Some(date) => date,
+// Pandas-compatible max datetime (pandas can't handle dates beyond ~2262)
+const MAX_DATETIME: NaiveDateTime = match NaiveDate::from_ymd_opt(2262, 4, 11) {
+    Some(date) => match date.and_hms_opt(23, 59, 59) {
+        Some(datetime) => datetime,
+        None => panic!("Invalid max time"),
+    },
     None => panic!("Invalid max date"),
 };
 
@@ -96,9 +99,10 @@ pub struct ChangeSet {
     pub to_insert: Vec<RecordBatch>,  // New rows to insert
 }
 
-fn extract_date(array: &Date32Array, idx: usize) -> NaiveDate {
-    let days_since_epoch = array.value(idx);
-    NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + Days::new(days_since_epoch as u64)
+fn extract_date_as_datetime(array: &TimestampMicrosecondArray, idx: usize) -> NaiveDateTime {
+    let microseconds_since_epoch = array.value(idx);
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    epoch + chrono::Duration::microseconds(microseconds_since_epoch)
 }
 
 fn extract_timestamp(array: &TimestampMicrosecondArray, idx: usize) -> NaiveDateTime {
@@ -143,9 +147,9 @@ pub fn process_updates(
     
     // Parse current state
     let eff_from_array = current_state.column_by_name("effective_from").unwrap()
-        .as_any().downcast_ref::<Date32Array>().unwrap();
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     let eff_to_array = current_state.column_by_name("effective_to").unwrap()
-        .as_any().downcast_ref::<Date32Array>().unwrap();
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     let as_of_from_array = current_state.column_by_name("as_of_from").unwrap()
         .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     
@@ -161,8 +165,8 @@ pub fn process_updates(
         let record = BitemporalRecord {
             id_values: id_values.clone(),
             value_hash: hash_values(&current_state, row_idx, &value_columns),
-            effective_from: extract_date(eff_from_array, row_idx),
-            effective_to: extract_date(eff_to_array, row_idx),
+            effective_from: extract_date_as_datetime(eff_from_array, row_idx),
+            effective_to: extract_date_as_datetime(eff_to_array, row_idx),
             as_of_from: extract_timestamp(as_of_from_array, row_idx),
             as_of_to: MAX_TIMESTAMP,
             original_index: Some(row_idx),
@@ -173,9 +177,9 @@ pub fn process_updates(
     
     // Parse updates
     let upd_eff_from_array = updates.column_by_name("effective_from").unwrap()
-        .as_any().downcast_ref::<Date32Array>().unwrap();
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     let upd_eff_to_array = updates.column_by_name("effective_to").unwrap()
-        .as_any().downcast_ref::<Date32Array>().unwrap();
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     let upd_as_of_from_array = updates.column_by_name("as_of_from").unwrap()
         .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
     
@@ -190,8 +194,8 @@ pub fn process_updates(
         let record = BitemporalRecord {
             id_values: upd_id_values.clone(),
             value_hash: hash_values(&updates, upd_idx, &value_columns),
-            effective_from: extract_date(upd_eff_from_array, upd_idx),
-            effective_to: extract_date(upd_eff_to_array, upd_idx),
+            effective_from: extract_date_as_datetime(upd_eff_from_array, upd_idx),
+            effective_to: extract_date_as_datetime(upd_eff_to_array, upd_idx),
             as_of_from: extract_timestamp(upd_as_of_from_array, upd_idx),
             as_of_to: MAX_TIMESTAMP,
             original_index: Some(upd_idx), // Store update index for reference
@@ -335,7 +339,7 @@ fn process_id_group(
 
 #[derive(Debug, Clone)]
 struct TimelineEvent {
-    date: NaiveDate,
+    date: NaiveDateTime,
     event_type: EventType,
     record: BitemporalRecord,
 }
@@ -370,7 +374,7 @@ fn process_id_timeline(
             event_type: EventType::CurrentStart,
             record: record.clone(),
         });
-        if record.effective_to != MAX_DATE {
+        if record.effective_to != MAX_DATETIME {
             events.push(TimelineEvent {
                 date: record.effective_to,
                 event_type: EventType::CurrentEnd,
@@ -386,7 +390,7 @@ fn process_id_timeline(
             event_type: EventType::UpdateStart,
             record: record.clone(),
         });
-        if record.effective_to != MAX_DATE {
+        if record.effective_to != MAX_DATETIME {
             events.push(TimelineEvent {
                 date: record.effective_to,
                 event_type: EventType::UpdateEnd,
@@ -466,7 +470,7 @@ fn process_id_timeline(
         last_date = Some(current_date);
         
         // Find next different date or end
-        let mut next_date = MAX_DATE;
+        let mut next_date = MAX_DATETIME;
         if i < events.len() {
             next_date = events[i].date;
         }
@@ -507,8 +511,8 @@ fn process_id_timeline(
 }
 
 fn emit_segment(
-    from_date: NaiveDate,
-    to_date: NaiveDate,
+    from_date: NaiveDateTime,
+    to_date: NaiveDateTime,
     active_current: &[&BitemporalRecord],
     active_updates: &[&BitemporalRecord],
     current_batch: &RecordBatch,
@@ -617,13 +621,13 @@ fn can_conflate_with_last_batch(last_batch: &RecordBatch, new_record: &Bitempora
 
     // Check if they're adjacent (last batch's effective_to == new record's effective_from)
     let eff_to_array = last_batch.column_by_name("effective_to").unwrap()
-        .as_any().downcast_ref::<Date32Array>().unwrap();
-    let last_effective_to = extract_date(eff_to_array, 0);
+        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+    let last_effective_to = extract_date_as_datetime(eff_to_array, 0);
     
     Ok(last_effective_to == new_record.effective_from)
 }
 
-fn extend_batch_effective_to(batch: &mut RecordBatch, new_effective_to: NaiveDate) -> Result<(), String> {
+fn extend_batch_effective_to(batch: &mut RecordBatch, new_effective_to: NaiveDateTime) -> Result<(), String> {
     let schema = batch.schema();
     let mut columns: Vec<ArrayRef> = Vec::new();
     
@@ -631,9 +635,10 @@ fn extend_batch_effective_to(batch: &mut RecordBatch, new_effective_to: NaiveDat
         let column_name = field.name();
         
         if column_name == "effective_to" {
-            let mut builder = Date32Array::builder(1);
-            let days = (new_effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (new_effective_to - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else {
             // Copy original column
@@ -655,14 +660,14 @@ fn simple_conflate_batches(mut batches: Vec<RecordBatch>) -> Result<Vec<RecordBa
 
     // Sort batches by effective_from for processing
     batches.sort_by(|a, b| {
-        let a_eff_from = extract_date(
+        let a_eff_from = extract_date_as_datetime(
             a.column_by_name("effective_from").unwrap()
-                .as_any().downcast_ref::<Date32Array>().unwrap(),
+                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
             0
         );
-        let b_eff_from = extract_date(
+        let b_eff_from = extract_date_as_datetime(
             b.column_by_name("effective_from").unwrap()
-                .as_any().downcast_ref::<Date32Array>().unwrap(),
+                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
             0
         );
         a_eff_from.cmp(&b_eff_from)
@@ -676,9 +681,9 @@ fn simple_conflate_batches(mut batches: Vec<RecordBatch>) -> Result<Vec<RecordBa
         // Check if we can merge current_batch with next_batch
         if can_merge_batches(&current_batch, &next_batch)? {
             // Merge by extending current_batch's effective_to
-            let next_eff_to = extract_date(
+            let next_eff_to = extract_date_as_datetime(
                 next_batch.column_by_name("effective_to").unwrap()
-                    .as_any().downcast_ref::<Date32Array>().unwrap(),
+                    .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
                 0
             );
             current_batch = extend_batch_to_date(current_batch, next_eff_to)?;
@@ -718,21 +723,21 @@ fn can_merge_batches(batch1: &RecordBatch, batch2: &RecordBatch) -> Result<bool,
     }
 
     // Check if they are adjacent
-    let batch1_eff_to = extract_date(
+    let batch1_eff_to = extract_date_as_datetime(
         batch1.column_by_name("effective_to").unwrap()
-            .as_any().downcast_ref::<Date32Array>().unwrap(),
+            .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
         0
     );
-    let batch2_eff_from = extract_date(
+    let batch2_eff_from = extract_date_as_datetime(
         batch2.column_by_name("effective_from").unwrap()
-            .as_any().downcast_ref::<Date32Array>().unwrap(),
+            .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
         0
     );
 
     Ok(batch1_eff_to == batch2_eff_from)
 }
 
-fn extend_batch_to_date(batch: RecordBatch, new_effective_to: NaiveDate) -> Result<RecordBatch, String> {
+fn extend_batch_to_date(batch: RecordBatch, new_effective_to: NaiveDateTime) -> Result<RecordBatch, String> {
     let schema = batch.schema();
     let mut columns: Vec<ArrayRef> = Vec::new();
     
@@ -740,9 +745,10 @@ fn extend_batch_to_date(batch: RecordBatch, new_effective_to: NaiveDate) -> Resu
         let column_name = field.name();
         
         if column_name == "effective_to" {
-            let mut builder = Date32Array::builder(1);
-            let days = (new_effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (new_effective_to - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else {
             // Copy original column
@@ -768,14 +774,16 @@ fn create_record_batch_from_record(
         let column_name = field.name();
         
         if column_name == "effective_from" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.effective_from - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.effective_from - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "effective_to" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.effective_to - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "as_of_from" {
             let mut builder = TimestampMicrosecondArray::builder(1);
@@ -817,14 +825,16 @@ fn create_record_batch_from_update(
         let column_name = field.name();
         
         if column_name == "effective_from" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.effective_from - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.effective_from - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "effective_to" {
-            let mut builder = Date32Array::builder(1);
-            let days = (record.effective_to - NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days();
-            builder.append_value(days as i32);
+            let mut builder = TimestampMicrosecondArray::builder(1);
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+            let microseconds = (record.effective_to - epoch).num_microseconds().unwrap();
+            builder.append_value(microseconds);
             columns.push(Arc::new(builder.finish()));
         } else if column_name == "as_of_from" {
             let mut builder = TimestampMicrosecondArray::builder(1);
@@ -860,19 +870,19 @@ fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBat
     }
     
     // Convert RecordBatches to a more workable format for deduplication
-    let mut records: Vec<(NaiveDate, NaiveDate, u64, RecordBatch)> = Vec::new();
+    let mut records: Vec<(NaiveDateTime, NaiveDateTime, u64, RecordBatch)> = Vec::new();
     
     for batch in batches {
         if batch.num_rows() == 1 {
             let eff_from_array = batch.column_by_name("effective_from").unwrap()
-                .as_any().downcast_ref::<Date32Array>().unwrap();
+                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
             let eff_to_array = batch.column_by_name("effective_to").unwrap()
-                .as_any().downcast_ref::<Date32Array>().unwrap();
+                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
             let hash_array = batch.column_by_name("value_hash").unwrap()
                 .as_any().downcast_ref::<Int64Array>().unwrap();
             
-            let eff_from = extract_date(eff_from_array, 0);
-            let eff_to = extract_date(eff_to_array, 0);
+            let eff_from = extract_date_as_datetime(eff_from_array, 0);
+            let eff_to = extract_date_as_datetime(eff_to_array, 0);
             let hash = hash_array.value(0) as u64;
             
             records.push((eff_from, eff_to, hash, batch));
@@ -894,7 +904,7 @@ fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBat
     
     // Remove exact duplicates
     let mut deduped: Vec<RecordBatch> = Vec::new();
-    let mut last_key: Option<(NaiveDate, NaiveDate, u64)> = None;
+    let mut last_key: Option<(NaiveDateTime, NaiveDateTime, u64)> = None;
     
     for (eff_from, eff_to, hash, batch) in records {
         let current_key = (eff_from, eff_to, hash);

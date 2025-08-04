@@ -1,10 +1,64 @@
 from datetime import datetime
+from typing import List, Tuple
 
+
+from pandas._testing import assert_frame_equal
 import pandas as pd
 
-from bitemporal_timeseries import BitemporalTimeseriesProcessor
+import pytest
 
-columns = ["id", "field", "mv", "price", "effective_from", "effective_to", "as_of_from", "as_of_to"]
+from bitemporal_timeseries import BitemporalTimeseriesProcessor, POSTGRES_INFINITY
+from tests.scenarios.basic import overwrite, insert, unrelated_state
+from tests.scenarios.defaults import default_id_columns, default_value_columns, default_columns
+
+scenarios = [
+    insert,
+    overwrite,
+    unrelated_state
+]
+
+
+@pytest.mark.parametrize(
+    ("current_state", "updates", "expected"),
+    [scenario.data() for scenario in scenarios],
+    ids=[scenario.id for scenario in scenarios]
+)
+def test_update_scenarios(current_state: List, updates: List, expected: Tuple[List, List]):
+
+    # Assemble
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=default_id_columns,
+        value_columns=default_value_columns
+    )
+
+    current_state_df = pd.DataFrame(current_state, columns=default_columns)
+    updates_df = pd.DataFrame(updates, columns=default_columns)
+
+    # Act
+    expire, insert = processor.compute_changes(
+        pd.DataFrame(current_state_df, columns=default_columns),
+        pd.DataFrame(updates_df, columns=default_columns),
+        update_mode="delta"
+    )
+
+    # Assert
+    expected_expire, expected_insert = expected
+
+    expected_expire_df = pd.DataFrame(expected_expire, columns=default_columns)
+    expected_insert_df = pd.DataFrame(expected_insert, columns=default_columns)
+
+    columns_no_as_of_to = list(default_columns)
+    columns_no_as_of_to.remove("as_of_to")
+    assert_frame_equal(expected_expire_df[columns_no_as_of_to], expire[columns_no_as_of_to],
+                       check_dtype=False,
+                       check_index_type=False)
+    assert_frame_equal(expected_insert_df[columns_no_as_of_to], insert[columns_no_as_of_to],
+                       check_dtype=False,
+                       check_index_type=False)
+
+    assert all([x == POSTGRES_INFINITY for x in insert["as_of_to"].to_list()])
+    assert all([x > pd.Timestamp.now().normalize() for x in expire["as_of_to"].to_list()])
+
 
 def test_bitemporal_overwrite():
 
@@ -37,8 +91,8 @@ def test_bitemporal_overwrite():
 
 
     expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=columns),
-        pd.DataFrame(update_state, columns=columns),
+        pd.DataFrame(current_state, columns=default_columns),
+        pd.DataFrame(update_state, columns=default_columns),
         update_mode="delta"
     )
 
@@ -77,8 +131,8 @@ def test_bitemporal_head_slice():
 
 
     expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=columns),
-        pd.DataFrame(update_state, columns=columns),
+        pd.DataFrame(current_state, columns=default_columns),
+        pd.DataFrame(update_state, columns=default_columns),
         update_mode="delta"
     )
 
@@ -122,8 +176,8 @@ def test_bitemporal_tail_slice():
 
 
     expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=columns),
-        pd.DataFrame(update_state, columns=columns),
+        pd.DataFrame(current_state, columns=default_columns),
+        pd.DataFrame(update_state, columns=default_columns),
         update_mode="delta"
     )
 
@@ -166,8 +220,8 @@ def test_bitemporal_total_overwrite():
     ]
 
     expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=columns),
-        pd.DataFrame(update_state, columns=columns),
+        pd.DataFrame(current_state, columns=default_columns),
+        pd.DataFrame(update_state, columns=default_columns),
         update_mode="delta"
     )
 
@@ -210,8 +264,8 @@ def test_bitemporal_two_updates():
     ]
 
     expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=columns),
-        pd.DataFrame(update_state, columns=columns),
+        pd.DataFrame(current_state, columns=default_columns),
+        pd.DataFrame(update_state, columns=default_columns),
         update_mode="delta"
     )
 
@@ -264,8 +318,8 @@ def test_bitemporal_update_multiple_current():
     ]
 
     expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=columns),
-        pd.DataFrame(update_state, columns=columns),
+        pd.DataFrame(current_state, columns=default_columns),
+        pd.DataFrame(update_state, columns=default_columns),
         update_mode="delta"
     )
 
