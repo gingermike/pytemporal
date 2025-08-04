@@ -61,13 +61,38 @@ def _unrelated_state() -> Tuple[List, List, Tuple]:
         ],
         [
             [4562, "test", 1, 1, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
-            [1234, "test", 2, 2, pdt("2022-01-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+            [1234, "test", 2, 2, pdt("2022-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
+            [1234, "fielda", 400, 500, pdt("2022-01-01"), pdt("2023-01-01"), pdt_past, pd_max],
         ],
         (
             [],
             [
                 [4562, "test", 1, 1, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
-                [1234, "test", 2, 2, pdt("2022-01-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 2, 2, pdt("2022-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
+                [1234, "fielda", 400, 500, pdt("2022-01-01"), pdt("2023-01-01"), pdt_past, pd_max],
+            ]
+        )
+    )
+
+
+def _append_tail() -> Tuple[List, List, Tuple]:
+    """
+    Update at the end of existing point
+    """
+    return (
+        [
+            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+        ],
+        [
+            [1234, "test", 2, 2, pdt("2022-06-30"), POSTGRES_INFINITY, pdt_now, pd_max]
+        ],
+        (
+            [
+                [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            ],
+            [
+                [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2022-06-30"), pdt_now, pd_max],
+                [1234, "test", 2, 2, pdt("2022-06-30"), POSTGRES_INFINITY, pdt_now, pd_max]
             ]
         )
     )
@@ -76,3 +101,4 @@ def _unrelated_state() -> Tuple[List, List, Tuple]:
 insert = BitemporalScenario("insert", _insert)
 overwrite = BitemporalScenario("overwrite", _overwrite)
 unrelated_state = BitemporalScenario("unrelated_state", _unrelated_state)
+append_tail = BitemporalScenario("append_tail", _append_tail)

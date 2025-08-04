@@ -24,6 +24,9 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **Build Python Wheel**: `uv run maturin develop` or `uv run maturin build --release`
 - **Python Environment**: Use `uv` for all Python commands to ensure proper virtual environment usage
 
+## CRITICAL Development Workflow
+**⚠️  IMPORTANT**: After making changes to Rust code (src/lib.rs), you MUST rebuild the Python bindings with `uv run maturin develop` before running Python tests. Changes to Rust code are NOT automatically reflected in Python tests until you rebuild the bindings. This has caused confusion in the past where fixes appeared not to work when they actually did.
+
 ## Performance Characteristics
 - **Baseline**: ~1.5s for 500k records (serial processing)
 - **Optimized**: ~885ms for 500k records (40% improvement with adaptive parallelization)
@@ -88,5 +91,6 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-07-27**: Updated all tests and benchmarks to use proper timestamp schemas
 - **2025-07-27**: Fixed infinity handling to use `2260-12-31 23:59:59` instead of NaT for clear debugging
 - **2025-07-27**: Added complete Gitea Actions workflow for Linux wheel building and publishing
+- **2025-08-04**: Fixed non-overlapping update issue where current state records were incorrectly re-emitted when updates had same ID but no temporal overlap. Enhanced `process_id_timeline` to separate overlapping vs non-overlapping updates and process them appropriately.
 
 This file should be updated whenever a new piece of context or information is added / discovered in this project

@@ -8,13 +8,14 @@ import pandas as pd
 import pytest
 
 from bitemporal_timeseries import BitemporalTimeseriesProcessor, POSTGRES_INFINITY
-from tests.scenarios.basic import overwrite, insert, unrelated_state
+from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail
 from tests.scenarios.defaults import default_id_columns, default_value_columns, default_columns
 
 scenarios = [
     insert,
     overwrite,
-    unrelated_state
+    unrelated_state,
+    append_tail
 ]
 
 
@@ -40,12 +41,16 @@ def test_update_scenarios(current_state: List, updates: List, expected: Tuple[Li
         pd.DataFrame(updates_df, columns=default_columns),
         update_mode="delta"
     )
+    expire = expire.sort_values(by=default_id_columns + ["effective_from"]).reset_index(drop=True)
+    insert = insert.sort_values(by=default_id_columns + ["effective_from"]).reset_index(drop=True)
 
     # Assert
     expected_expire, expected_insert = expected
 
-    expected_expire_df = pd.DataFrame(expected_expire, columns=default_columns)
-    expected_insert_df = pd.DataFrame(expected_insert, columns=default_columns)
+    expected_expire_df = pd.DataFrame(expected_expire, columns=default_columns).sort_values(
+        by=default_id_columns + ["effective_from"]).reset_index(drop=True)
+    expected_insert_df = pd.DataFrame(expected_insert, columns=default_columns).sort_values(
+        by=default_id_columns + ["effective_from"]).reset_index(drop=True)
 
     columns_no_as_of_to = list(default_columns)
     columns_no_as_of_to.remove("as_of_to")
@@ -58,46 +63,6 @@ def test_update_scenarios(current_state: List, updates: List, expected: Tuple[Li
 
     assert all([x == POSTGRES_INFINITY for x in insert["as_of_to"].to_list()])
     assert all([x > pd.Timestamp.now().normalize() for x in expire["as_of_to"].to_list()])
-
-
-def test_bitemporal_overwrite():
-
-    processor = BitemporalTimeseriesProcessor(
-        id_columns=["id", "field"],
-        value_columns=["mv", "price"]
-    )
-
-    current_state = [
-            [
-                1234, "test", 300, 400,
-                    pd.to_datetime("2020-01-01"), pd.to_datetime("2021-01-01"),
-                    pd.to_datetime("2025-01-01"), pd.Timestamp.max
-            ],
-            [
-                1234, "fielda", 400, 500,
-                    pd.to_datetime("2020-01-01"), pd.to_datetime("2021-01-01"),
-                    pd.to_datetime("2025-01-01"), pd.Timestamp.max
-            ],
-        ]
-
-    update_state = [
-        [
-            1234, "test", 400, 300,
-                pd.to_datetime("2020-01-01"), pd.to_datetime("2021-01-01"),
-                pd.to_datetime(datetime.now()), pd.Timestamp.max
-        ]
-    ]
-
-
-
-    expire, insert = processor.compute_changes(
-        pd.DataFrame(current_state, columns=default_columns),
-        pd.DataFrame(update_state, columns=default_columns),
-        update_mode="delta"
-    )
-
-    assert len(expire) == 1
-    assert len(insert) == 1
 
 
 def test_bitemporal_head_slice():

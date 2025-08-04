@@ -364,37 +364,83 @@ fn process_id_timeline(
     let mut expire_indices = Vec::new();
     let mut insert_batches = Vec::new();
     
-    // Create timeline events for current state and updates
+    // Separate overlapping and non-overlapping updates
+    let mut overlapping_current = Vec::new();
+    let mut overlapping_updates = Vec::new();
+    let mut non_overlapping_updates = Vec::new();
+    
+    // Check each update for temporal overlap with current records
+    for update_record in update_records {
+        let has_overlap = current_records.iter().any(|current_record| {
+            current_record.effective_from < update_record.effective_to &&
+            current_record.effective_to > update_record.effective_from
+        });
+        
+        if has_overlap {
+            overlapping_updates.push(update_record);
+        } else {
+            non_overlapping_updates.push(update_record);
+        }
+    }
+    
+    // Find current records that overlap with any update
+    for current_record in current_records {
+        let has_overlap = update_records.iter().any(|update_record| {
+            current_record.effective_from < update_record.effective_to &&
+            current_record.effective_to > update_record.effective_from
+        });
+        
+        if has_overlap {
+            overlapping_current.push(current_record);
+        }
+    }
+    
+    // Process non-overlapping updates directly
+    for update_record in non_overlapping_updates {
+        let batch = create_record_batch_from_update(
+            updates_batch,
+            update_record.original_index.unwrap(),
+            update_record,
+        )?;
+        insert_batches.push(batch);
+    }
+    
+    // If no overlapping records, we're done
+    if overlapping_current.is_empty() && overlapping_updates.is_empty() {
+        return Ok((expire_indices, insert_batches));
+    }
+    
+    // Create timeline events for overlapping current state and updates only
     let mut events = Vec::new();
     
-    // Add current state events
-    for record in current_records {
+    // Add current state events (only overlapping ones)
+    for record in &overlapping_current {
         events.push(TimelineEvent {
             date: record.effective_from,
             event_type: EventType::CurrentStart,
-            record: record.clone(),
+            record: (*record).clone(),
         });
         if record.effective_to != MAX_DATETIME {
             events.push(TimelineEvent {
                 date: record.effective_to,
                 event_type: EventType::CurrentEnd,
-                record: record.clone(),
+                record: (*record).clone(),
             });
         }
     }
     
-    // Add update events
-    for record in update_records {
+    // Add update events (only overlapping ones)
+    for record in &overlapping_updates {
         events.push(TimelineEvent {
             date: record.effective_from,
             event_type: EventType::UpdateStart,
-            record: record.clone(),
+            record: (*record).clone(),
         });
         if record.effective_to != MAX_DATETIME {
             events.push(TimelineEvent {
                 date: record.effective_to,
                 event_type: EventType::UpdateEnd,
-                record: record.clone(),
+                record: (*record).clone(),
             });
         }
     }
@@ -493,17 +539,10 @@ fn process_id_timeline(
         }
     }
     
-    // Expire all current records that had any overlap with updates
-    for current_record in current_records {
-        let has_overlap = update_records.iter().any(|update_record| {
-            current_record.effective_from < update_record.effective_to &&
-            current_record.effective_to > update_record.effective_from
-        });
-        
-        if has_overlap {
-            if let Some(orig_idx) = current_record.original_index {
-                expire_indices.push(orig_idx);
-            }
+    // Expire all current records that had overlaps (we already computed this)
+    for current_record in &overlapping_current {
+        if let Some(orig_idx) = current_record.original_index {
+            expire_indices.push(orig_idx);
         }
     }
     
