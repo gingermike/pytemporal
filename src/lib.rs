@@ -371,6 +371,22 @@ fn process_id_timeline(
     
     // Check each update for temporal overlap with current records
     for update_record in update_records {
+        // Skip updates that intersect with same values (no-change scenarios)
+        let is_no_change_intersection = current_records.iter().any(|current_record| {
+            // Check for any temporal intersection
+            let has_intersection = current_record.effective_from < update_record.effective_to &&
+                                 current_record.effective_to > update_record.effective_from;
+            
+            // Same values
+            let same_values = current_record.value_hash == update_record.value_hash;
+            
+            has_intersection && same_values
+        });
+        
+        if is_no_change_intersection {
+            continue; // Skip this update entirely
+        }
+        
         let has_overlap = current_records.iter().any(|current_record| {
             // Standard overlap check
             let standard_overlap = current_record.effective_from < update_record.effective_to &&
@@ -392,9 +408,9 @@ fn process_id_timeline(
         }
     }
     
-    // Find current records that overlap with any update
+    // Find current records that overlap with any remaining (non-filtered) update
     for current_record in current_records {
-        let has_overlap = update_records.iter().any(|update_record| {
+        let has_overlap = overlapping_updates.iter().chain(non_overlapping_updates.iter()).any(|update_record| {
             // Standard overlap check
             let standard_overlap = current_record.effective_from < update_record.effective_to &&
                                  current_record.effective_to > update_record.effective_from;

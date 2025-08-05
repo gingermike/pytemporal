@@ -266,7 +266,7 @@ fn test_no_changes_when_values_same() {
         UpdateMode::Delta,
     ).unwrap();
 
-    // Should expire 1 row but only insert 1 row with updated as_of_from
-    assert_eq!(changeset.to_expire.len(), 1);
-    assert_eq!(changeset.to_insert.len(), 1);
+    // Should not expire or insert anything when values are the same and dates intersect
+    assert_eq!(changeset.to_expire.len(), 0);
+    assert_eq!(changeset.to_insert.len(), 0);
 }

@@ -195,6 +195,24 @@ def _extend_update() -> Tuple[List, List, Tuple]:
     )
 
 
+def _no_change_with_intersection() -> Tuple[List, List, Tuple]:
+    """
+    Does not emit any updates if update is an overlap with no value change
+    """
+    return (
+        [
+            [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+        ],
+        [
+            [1234, "test", 100, 100, pdt("2020-02-01"), pdt("2020-04-01"), pdt_now, pd_max],
+        ],
+        (
+            [],
+            []
+        )
+    )
+
+
 overlay_two = BitemporalScenario("overlay_two", _overlay_two)
 overlay_multiple = BitemporalScenario("overlay_multiple", _overlay_multiple)
 multi_intersection_single_point = BitemporalScenario("multi_intersection_single_point", _multi_intersection_single_point)
@@ -202,3 +220,4 @@ multi_intersection_multiple_point = BitemporalScenario("multi_intersection_multi
 multi_field = BitemporalScenario("multi_field", _multi_field)
 extend_current_row = BitemporalScenario("extend_current_row", _extend_current_row)
 extend_update = BitemporalScenario("extend_update", _extend_update)
+no_change_with_intersection = BitemporalScenario("no_change_with_intersection", _no_change_with_intersection)

@@ -111,9 +111,9 @@ class BitemporalTimeseriesProcessor:
                 insert_dfs.append(pd.DataFrame(data))
             
             # Combine all DataFrames
-            rows_to_insert = pd.concat(insert_dfs, ignore_index=True) if insert_dfs else pd.DataFrame()
+            rows_to_insert = pd.concat(insert_dfs, ignore_index=True) if insert_dfs else pd.DataFrame(columns=current_state.columns)
         else:
-            rows_to_insert = pd.DataFrame()
+            rows_to_insert = pd.DataFrame(columns=current_state.columns)
         
         if not rows_to_insert.empty:
             rows_to_insert = self._convert_from_internal_format(rows_to_insert)
