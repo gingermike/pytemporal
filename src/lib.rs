@@ -372,8 +372,15 @@ fn process_id_timeline(
     // Check each update for temporal overlap with current records
     for update_record in update_records {
         let has_overlap = current_records.iter().any(|current_record| {
-            current_record.effective_from < update_record.effective_to &&
-            current_record.effective_to > update_record.effective_from
+            // Standard overlap check
+            let standard_overlap = current_record.effective_from < update_record.effective_to &&
+                                 current_record.effective_to > update_record.effective_from;
+            
+            // Extension/conflation check: adjacent periods with same values
+            let is_extension = current_record.effective_to == update_record.effective_from &&
+                             current_record.value_hash == update_record.value_hash;
+            
+            standard_overlap || is_extension
         });
         
         if has_overlap {
@@ -386,8 +393,15 @@ fn process_id_timeline(
     // Find current records that overlap with any update
     for current_record in current_records {
         let has_overlap = update_records.iter().any(|update_record| {
-            current_record.effective_from < update_record.effective_to &&
-            current_record.effective_to > update_record.effective_from
+            // Standard overlap check
+            let standard_overlap = current_record.effective_from < update_record.effective_to &&
+                                 current_record.effective_to > update_record.effective_from;
+            
+            // Extension/conflation check: adjacent periods with same values
+            let is_extension = current_record.effective_to == update_record.effective_from &&
+                             current_record.value_hash == update_record.value_hash;
+            
+            standard_overlap || is_extension
         });
         
         if has_overlap {

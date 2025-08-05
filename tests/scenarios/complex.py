@@ -173,9 +173,32 @@ def _extend_current_row() -> Tuple[List, List, Tuple]:
     )
 
 
+def _extend_update() -> Tuple[List, List, Tuple]:
+    """
+    Extends the update if values are equal
+    """
+    return (
+        [
+            [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+        ],
+        [
+            [1234, "test", 100, 100, pdt("2019-01-01"), pdt("2020-01-01"), pdt_now, pd_max],
+        ],
+        (
+            [
+                [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            ],
+            [
+                [1234, "test", 100, 100, pdt("2020-01-01"), pdt("2022-11-01"), pdt_now, pd_max],
+            ]
+        )
+    )
+
+
 overlay_two = BitemporalScenario("overlay_two", _overlay_two)
 overlay_multiple = BitemporalScenario("overlay_multiple", _overlay_multiple)
 multi_intersection_single_point = BitemporalScenario("multi_intersection_single_point", _multi_intersection_single_point)
 multi_intersection_multiple_point = BitemporalScenario("multi_intersection_multiple_point", _multi_intersection_multiple_point)
 multi_field = BitemporalScenario("multi_field", _multi_field)
 extend_current_row = BitemporalScenario("extend_current_row", _extend_current_row)
+extend_update = BitemporalScenario("extend_update", _extend_update)
