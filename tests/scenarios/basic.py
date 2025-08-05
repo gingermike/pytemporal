@@ -185,6 +185,24 @@ def _intersect() -> Tuple[List, List, Tuple]:
     )
 
 
+def _no_change() -> Tuple[List, List, Tuple]:
+    """
+    Value has not changed, does not result in insert or expiration
+    """
+    return (
+        [
+            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+        ],
+        [
+            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+        ],
+        (
+            [],
+            []
+        )
+    )
+
+
 insert = BitemporalScenario("insert", _insert)
 overwrite = BitemporalScenario("overwrite", _overwrite)
 unrelated_state = BitemporalScenario("unrelated_state", _unrelated_state)
@@ -193,4 +211,4 @@ append_tail_exact = BitemporalScenario("append_tail_exact", _append_tail_exact)
 append_head = BitemporalScenario("append_head", _append_head)
 append_head_exact = BitemporalScenario("append_head_exact", _append_head_exact)
 intersect = BitemporalScenario("intersect", _intersect)
-
+no_change = BitemporalScenario("no_change", _no_change)

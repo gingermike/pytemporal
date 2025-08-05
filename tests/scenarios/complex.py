@@ -189,7 +189,7 @@ def _extend_update() -> Tuple[List, List, Tuple]:
                 [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
             ],
             [
-                [1234, "test", 100, 100, pdt("2020-01-01"), pdt("2022-11-01"), pdt_now, pd_max],
+                [1234, "test", 100, 100, pdt("2019-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
             ]
         )
     )

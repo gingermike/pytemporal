@@ -379,8 +379,10 @@ fn process_id_timeline(
             // Extension/conflation check: adjacent periods with same values
             let is_extension = current_record.effective_to == update_record.effective_from &&
                              current_record.value_hash == update_record.value_hash;
+            let is_reverse_extension = update_record.effective_to == current_record.effective_from &&
+                                     current_record.value_hash == update_record.value_hash;
             
-            standard_overlap || is_extension
+            standard_overlap || is_extension || is_reverse_extension
         });
         
         if has_overlap {
@@ -400,8 +402,10 @@ fn process_id_timeline(
             // Extension/conflation check: adjacent periods with same values
             let is_extension = current_record.effective_to == update_record.effective_from &&
                              current_record.value_hash == update_record.value_hash;
+            let is_reverse_extension = update_record.effective_to == current_record.effective_from &&
+                                     current_record.value_hash == update_record.value_hash;
             
-            standard_overlap || is_extension
+            standard_overlap || is_extension || is_reverse_extension
         });
         
         if has_overlap {
