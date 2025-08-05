@@ -8,14 +8,30 @@ import pandas as pd
 import pytest
 
 from bitemporal_timeseries import BitemporalTimeseriesProcessor, POSTGRES_INFINITY
-from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail
+from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
+    append_head_exact, intersect
+from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \
+    multi_intersection_multiple_point, multi_field, extend_current_row
 from tests.scenarios.defaults import default_id_columns, default_value_columns, default_columns
 
 scenarios = [
+    #basic
     insert,
     overwrite,
     unrelated_state,
-    append_tail
+    append_tail,
+    append_tail_exact,
+    append_head,
+    append_head_exact,
+    intersect,
+
+    #complex
+    overlay_two,
+    overlay_multiple,
+    multi_intersection_single_point,
+    multi_intersection_multiple_point,
+    multi_field,
+    extend_current_row
 ]
 
 
