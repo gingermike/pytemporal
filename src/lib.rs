@@ -410,6 +410,13 @@ fn process_id_timeline(
         return Ok((expire_indices, insert_batches));
     }
     
+    // Get the update's as_of_from timestamp for re-emitted current state records
+    let update_as_of_from = if !overlapping_updates.is_empty() {
+        Some(overlapping_updates.first().unwrap().as_of_from)
+    } else {
+        None
+    };
+    
     // Create timeline events for overlapping current state and updates only
     let mut events = Vec::new();
     
@@ -489,6 +496,7 @@ fn process_id_timeline(
                     system_date,
                     &mut expire_indices,
                     &mut insert_batches,
+                    update_as_of_from,
                 )?;
             }
         }
@@ -535,6 +543,7 @@ fn process_id_timeline(
                 system_date,
                 &mut expire_indices,
                 &mut insert_batches,
+                update_as_of_from,
             )?;
         }
     }
@@ -561,6 +570,7 @@ fn emit_segment(
     system_date: NaiveDate,
     _expire_indices: &mut Vec<usize>,
     insert_batches: &mut Vec<RecordBatch>,
+    update_as_of_from: Option<NaiveDateTime>, // Timestamp from overlapping updates
 ) -> Result<(), String> {
     // Determine what record to emit
     let (record_to_emit, use_current_batch) = if let Some(update_record) = active_updates.first() {
@@ -585,12 +595,21 @@ fn emit_segment(
     };
 
     // Create the segment record
+    // When re-emitting current state due to overlapping updates, use the update's as_of_from
+    let as_of_from = if use_current_batch && update_as_of_from.is_some() {
+        // Current state being re-emitted due to overlapping update - use update's timestamp
+        update_as_of_from.unwrap()
+    } else {
+        // Normal case - use the record's own timestamp
+        record_to_emit.as_of_from
+    };
+    
     let segment_record = BitemporalRecord {
         id_values: record_to_emit.id_values.clone(),
         value_hash: record_to_emit.value_hash,
         effective_from: from_date,
         effective_to: to_date,
-        as_of_from: record_to_emit.as_of_from,
+        as_of_from,
         as_of_to: MAX_TIMESTAMP,
         original_index: None,
     };
