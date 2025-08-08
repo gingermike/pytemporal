@@ -1,6 +1,6 @@
-use bitemporal_timeseries::{process_updates, UpdateMode, ChangeSet};
+use bitemporal_timeseries::{process_updates, UpdateMode};
 use chrono::{NaiveDate, NaiveDateTime};
-use arrow::array::{Date32Array, TimestampMicrosecondArray, Int32Array, Int64Array, StringArray};
+use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ fn create_test_batch(
         Some(date) => date,
         None => panic!("Invalid max date"),
     };
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let _epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
     for (id, field, mv, price, eff_from, eff_to, as_of_from, as_of_to) in data {
         id_builder.append_value(id);
@@ -99,16 +99,11 @@ fn create_test_batch(
     .map_err(|e| e.to_string())
 }
 
-fn extract_date(array: &Date32Array, index: usize) -> NaiveDate {
-    let days = array.value(index);
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    epoch + chrono::Duration::days(days as i64)
-}
 
 fn extract_timestamp(array: &TimestampMicrosecondArray, index: usize) -> NaiveDateTime {
     let microseconds = array.value(index);
-    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
-    epoch + chrono::Duration::microseconds(microseconds)
+    let epoch_datetime = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    epoch_datetime + chrono::Duration::microseconds(microseconds)
 }
 
 #[test]

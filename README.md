@@ -10,6 +10,7 @@ A high-performance Rust library with Python bindings for processing bitemporal t
 - **Conflation**: Automatic merging of adjacent segments with identical values to reduce storage
 - **Flexible Schema**: Dynamic ID and value column configuration
 - **Python Integration**: Seamless PyO3 bindings for Python workflows
+- **Modular Architecture**: Clean separation of concerns with dedicated modules
 
 ## Installation
 
@@ -18,14 +19,14 @@ Build from source (requires Rust):
 ```bash
 git clone <your-repository-url>
 cd bitemporal-timeseries
-maturin develop --release
+uv run maturin develop --release
 ```
 
 ## Quick Start
 
 ```python
 import pandas as pd
-from bitemporal_timeseries import process_updates, UpdateMode
+from bitemporal_timeseries import compute_changes
 import pyarrow as pa
 from datetime import datetime
 
@@ -61,53 +62,150 @@ updates = pd.DataFrame({
 })
 
 # Process updates
-changeset = process_updates(
+expire_indices, insert_batches = compute_changes(
     df_to_record_batch(current_state),
     df_to_record_batch(updates),
     id_columns=['id', 'field'],
     value_columns=['mv', 'price'],
-    system_date=datetime(2025, 7, 27).date(),
-    update_mode=UpdateMode.Delta
+    system_date='2025-07-27',
+    update_mode='delta'
 )
 
-print(f"Records to expire: {len(changeset.to_expire)}")
-print(f"Records to insert: {len(changeset.to_insert)}")
+print(f"Records to expire: {len(expire_indices)}")
+print(f"Records to insert: {len(insert_batches)}")
 ```
 
-## How It Works
+## Algorithm Explanation with Examples
 
 ### Bitemporal Model
 
 Each record tracks two time dimensions:
-- **Effective Time** (`effective_from`, `effective_to`): When the data is valid in the real world (Date32 precision)
-- **As-Of Time** (`as_of_from`, `as_of_to`): When the data was known to the system (TimestampMicrosecond precision for audit accuracy)
+- **Effective Time** (`effective_from`, `effective_to`): When the data is valid in the real world
+- **As-Of Time** (`as_of_from`, `as_of_to`): When the data was known to the system
 
-### Update Processing
+Both use TimestampMicrosecond precision for maximum accuracy.
 
-When processing updates that overlap existing records:
+### Core Algorithm: Timeline Processing
 
-1. **Expire** original overlapping records by setting their `as_of_to` 
-2. **Insert** new records to maintain temporal continuity:
-   - Records before the update (preserving original values)
-   - The update itself 
-   - Records after the update (preserving original values)
+The algorithm processes updates by creating a timeline of events and determining what should be active at each point in time.
 
-### Conflation
+#### Example 1: Simple Overwrite
 
-The system automatically merges adjacent temporal segments with identical value hashes, reducing the number of database rows while maintaining temporal accuracy.
-
-Example:
+**Current State:**
 ```
-Before conflation: |--A--|--A--|--A--|--B--|
-After conflation:  |------A------|--B--|
+ID=123, effective: [2020-01-01, 2021-01-01], as_of: [2025-01-01, max], mv=100
 ```
+
+**Update:**
+```  
+ID=123, effective: [2020-06-01, 2020-09-01], as_of: [2025-07-27, max], mv=200
+```
+
+**Timeline Processing:**
+
+1. **Create Events:**
+   - 2020-01-01: Current starts (mv=100)
+   - 2020-06-01: Update starts (mv=200) 
+   - 2020-09-01: Update ends
+   - 2021-01-01: Current ends
+
+2. **Process Timeline:**
+   - [2020-01-01, 2020-06-01): Current active → emit mv=100
+   - [2020-06-01, 2020-09-01): Update active → emit mv=200  
+   - [2020-09-01, 2021-01-01): Current active → emit mv=100
+
+3. **Result:**
+   - **Expire:** Original record (index 0)
+   - **Insert:** Three new records covering the split timeline
+
+**Visual Representation:**
+```
+Before:
+Current |=======mv=100========|
+        2020-01-01      2021-01-01
+
+Update       |==mv=200==|
+             2020-06-01  2020-09-01
+
+After:
+New     |=100=|=mv=200=|=100=|
+        2020   2020     2020  2021
+        01-01  06-01    09-01 01-01
+```
+
+#### Example 2: Conflation (Adjacent Identical Values)
+
+**Current State:**
+```
+ID=123, effective: [2020-01-01, 2020-06-01], as_of: [2025-01-01, max], mv=100
+ID=123, effective: [2020-06-01, 2021-01-01], as_of: [2025-01-01, max], mv=100  
+```
+
+**Update:**
+```
+ID=123, effective: [2020-03-01, 2020-04-01], as_of: [2025-07-27, max], mv=100
+```
+
+Since the update has the same value (mv=100) as the current state, the algorithm detects this as a **no-change scenario** and skips processing entirely.
+
+#### Example 3: Complex Multi-Update
+
+**Current State:**
+```
+ID=123, effective: [2020-01-01, 2021-01-01], as_of: [2025-01-01, max], mv=100
+```
+
+**Updates:**
+```
+ID=123, effective: [2020-03-01, 2020-06-01], as_of: [2025-07-27, max], mv=200
+ID=123, effective: [2020-09-01, 2020-12-01], as_of: [2025-07-27, max], mv=300
+```
+
+**Timeline Processing:**
+
+1. **Events:** 2020-01-01 (current start), 2020-03-01 (update1 start), 2020-06-01 (update1 end), 2020-09-01 (update2 start), 2020-12-01 (update2 end), 2021-01-01 (current end)
+
+2. **Result:**
+   - [2020-01-01, 2020-03-01): mv=100 (current)
+   - [2020-03-01, 2020-06-01): mv=200 (update1)  
+   - [2020-06-01, 2020-09-01): mv=100 (current)
+   - [2020-09-01, 2020-12-01): mv=300 (update2)
+   - [2020-12-01, 2021-01-01): mv=100 (current)
+
+### Post-Processing Conflation
+
+After timeline processing, the algorithm merges adjacent segments with identical value hashes:
+
+**Before Conflation:**
+```
+|--mv=100--|--mv=100--|--mv=200--|--mv=100--|--mv=100--|
+```
+
+**After Conflation:**
+```
+|--------mv=100--------|--mv=200--|--------mv=100--------|
+```
+
+This significantly reduces database row count while preserving temporal accuracy.
+
+### Update Modes
+
+1. **Delta Mode** (default): Only provided records are updates, existing state is preserved where not overlapped
+2. **Full State Mode**: Provided records represent complete new state, all current records for matching IDs are expired
+
+### Parallelization Strategy
+
+The algorithm uses adaptive parallelization:
+- **Serial Processing**: Small datasets (<50 ID groups AND <10k records) 
+- **Parallel Processing**: Large datasets using Rayon for CPU-bound operations
+- **ID Group Independence**: Each ID group processes independently, enabling perfect parallelization
 
 ## Performance
 
 Benchmarked on modern hardware:
 
 - **500k records**: ~885ms processing time
-- **Adaptive Parallelization**: Automatically uses multiple threads for large datasets
+- **Adaptive Parallelization**: Automatically uses multiple threads for large datasets  
 - **Parallel Thresholds**: >50 ID groups OR >10k total records triggers parallel processing
 - **Conflation Efficiency**: Significant row reduction for datasets with temporal continuity
 
@@ -120,7 +218,7 @@ Run the test suites:
 cargo test
 
 # Python tests  
-uv run python -m pytest tests/test_bitemporal_manual.py -v
+uv run python -m pytest tests/test_bitemporal.py -v
 
 # Benchmarks
 cargo bench
@@ -130,9 +228,16 @@ cargo bench
 
 ### Project Structure
 
-- `src/lib.rs` - Core bitemporal algorithm (870 lines)
-- `tests/integration_tests.rs` - Rust integration tests 
-- `tests/test_bitemporal_manual.py` - Python test suite
+**Modular Architecture** (274 lines total in main file, down from 1,085):
+
+- `src/lib.rs` - Main processing function and Python bindings (274 lines)
+- `src/types.rs` - Core data structures and constants (88 lines)
+- `src/overlap.rs` - Overlap detection and record categorization (68 lines) 
+- `src/timeline.rs` - Timeline event processing algorithm (218 lines)
+- `src/conflation.rs` - Record conflation and deduplication (157 lines)
+- `src/batch_utils.rs` - Arrow RecordBatch utilities (122 lines)
+- `tests/integration_tests.rs` - Rust integration tests (5 test scenarios)
+- `tests/test_bitemporal_manual.py` - Python test suite (22 test scenarios)
 - `benches/bitemporal_benchmarks.rs` - Performance benchmarks
 - `CLAUDE.md` - Project context and development notes
 
@@ -145,21 +250,20 @@ cargo build --release
 # Run benchmarks with HTML reports
 cargo bench
 
-# Build Python wheel
-maturin build --release
+# Build Python wheel  
+uv run maturin build --release
 
 # Development install
-maturin develop
+uv run maturin develop
 ```
 
-### Algorithm Details
+### Module Responsibilities
 
-The core algorithm:
-1. Groups records by ID columns for independent processing
-2. Processes each group to handle overlapping effective time periods
-3. Computes value hashes for change detection
-4. Applies conflation to merge adjacent identical segments
-5. Returns changesets with records to expire and insert
+1. **`types.rs`** - Data structures (`BitemporalRecord`, `ChangeSet`, `UpdateMode`) and type conversions
+2. **`overlap.rs`** - Determines which records overlap in time and need timeline processing vs direct insertion
+3. **`timeline.rs`** - Core algorithm that processes overlapping records through event timeline
+4. **`conflation.rs`** - Post-processes results to merge adjacent segments with identical values  
+5. **`batch_utils.rs`** - Arrow utilities for RecordBatch creation and timestamp handling
 
 ## Dependencies
 
@@ -177,6 +281,7 @@ The core algorithm:
 - Parallel execution with Rayon
 - Hash-based change detection with xxHash
 - Post-processing conflation for optimal storage
+- Modular design with clear separation of concerns
 
 ### Python Interface
 - PyO3 bindings for seamless integration
@@ -189,6 +294,7 @@ The core algorithm:
 2. Run tests before submitting changes
 3. Follow existing code style and patterns
 4. Update benchmarks for performance-related changes
+5. Maintain modular architecture when adding features
 
 ## License
 

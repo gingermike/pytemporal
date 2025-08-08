@@ -94,4 +94,7 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-08-04**: Fixed non-overlapping update issue where current state records were incorrectly re-emitted when updates had same ID but no temporal overlap. Enhanced `process_id_timeline` to separate overlapping vs non-overlapping updates and process them appropriately.
 - **2025-08-04**: Fixed `as_of_from` timestamp inheritance issue where re-emitted current state segments retained old timestamps instead of inheriting the update's `as_of_from` timestamp. Modified `emit_segment` to pass and use update timestamps for current state records affected by overlapping updates.
 
+## Development Best Practices
+- Ensure to keep README.md up to date with changes to the code base or approach
+
 This file should be updated whenever a new piece of context or information is added / discovered in this project

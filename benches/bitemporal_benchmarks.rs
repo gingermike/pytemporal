@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use bitemporal_timeseries::*;
-use chrono::{NaiveDate, NaiveDateTime};
-use arrow::array::{Date32Array, TimestampMicrosecondArray, Int32Array, Int64Array};
+use chrono::NaiveDate;
+use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
@@ -14,8 +14,8 @@ fn create_test_batch(
     let mut field_builder = arrow::array::StringBuilder::new();
     let mut mv_builder = Int32Array::builder(data.len());
     let mut price_builder = Int32Array::builder(data.len());
-    let mut eff_from_builder = Date32Array::builder(data.len());
-    let mut eff_to_builder = Date32Array::builder(data.len());
+    let mut eff_from_builder = TimestampMicrosecondArray::builder(data.len());
+    let mut eff_to_builder = TimestampMicrosecondArray::builder(data.len());
     let mut as_of_from_builder = TimestampMicrosecondArray::builder(data.len());
     let mut as_of_to_builder = TimestampMicrosecondArray::builder(data.len());
     let mut value_hash_builder = Int64Array::builder(data.len());
@@ -25,7 +25,7 @@ fn create_test_batch(
         Some(date) => date,
         None => panic!("Invalid max date"),
     };
-    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let _epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
 
     for (id, field, mv, price, eff_from, eff_to, as_of_from, as_of_to) in data {
         id_builder.append_value(id);
@@ -35,8 +35,10 @@ fn create_test_batch(
         
         let eff_from_date = NaiveDate::parse_from_str(eff_from, "%Y-%m-%d")
             .map_err(|e| e.to_string())?;
-        let eff_from_days = (eff_from_date - epoch).num_days() as i32;
-        eff_from_builder.append_value(eff_from_days);
+        let eff_from_datetime = eff_from_date.and_hms_opt(0, 0, 0).unwrap();
+        let epoch_datetime = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+        let eff_from_micros = (eff_from_datetime - epoch_datetime).num_microseconds().unwrap();
+        eff_from_builder.append_value(eff_from_micros);
         
         let eff_to_date = if eff_to == "max" {
             MAX_DATE
@@ -44,8 +46,9 @@ fn create_test_batch(
             NaiveDate::parse_from_str(eff_to, "%Y-%m-%d")
                 .map_err(|e| e.to_string())?
         };
-        let eff_to_days = (eff_to_date - epoch).num_days() as i32;
-        eff_to_builder.append_value(eff_to_days);
+        let eff_to_datetime = eff_to_date.and_hms_opt(0, 0, 0).unwrap();
+        let eff_to_micros = (eff_to_datetime - epoch_datetime).num_microseconds().unwrap();
+        eff_to_builder.append_value(eff_to_micros);
         
         let as_of_from_date = NaiveDate::parse_from_str(as_of_from, "%Y-%m-%d")
             .map_err(|e| e.to_string())?
@@ -73,8 +76,8 @@ fn create_test_batch(
         Field::new("field", DataType::Utf8, false),
         Field::new("mv", DataType::Int32, false),
         Field::new("price", DataType::Int32, false),
-        Field::new("effective_from", DataType::Date32, false),
-        Field::new("effective_to", DataType::Date32, false),
+        Field::new("effective_from", DataType::Timestamp(TimeUnit::Microsecond, None), false),
+        Field::new("effective_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("as_of_from", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("as_of_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("value_hash", DataType::Int64, false),

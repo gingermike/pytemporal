@@ -7,7 +7,50 @@ on:
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+        
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+      
+    - name: Create virtual environment
+      run: uv venv
+      
+    - name: Install maturin
+      run: uv pip install maturin[patchelf]
+      
+    - name: Run Rust tests
+      run: cargo test --verbose
+      
+    - name: Install Python dependencies and run Python tests
+      run: |
+        # Install Python dependencies needed for testing
+        uv pip install pytest pandas pyarrow
+        
+        # Build the Python module for testing (development mode)
+        uv run maturin develop
+        
+        # Run Python tests
+        uv run python -m pytest tests/test_bitemporal.py -v
+        
+    - name: Run benchmarks (smoke test)
+      run: |
+        # Run a quick benchmark to ensure no major performance regressions
+        # Use smaller sample size for CI speed
+        cargo bench -- --sample-size 5
+
   build-linux-wheels:
+    needs: test  # Only run if tests pass
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -50,10 +93,14 @@ jobs:
       
     - name: Build wheel
       run: |
+        # Find the Python interpreter path
+        PYTHON_PATH=$(which python3)
+        echo "Using Python interpreter: $PYTHON_PATH"
+        
         if [ "${{ matrix.target }}" = "x86_64" ]; then
           uv run maturin build --release --out dist --find-interpreter
         else
-          uv run maturin build --release --target ${{ matrix.target }}-unknown-linux-gnu --out dist
+          uv run maturin build --release --target ${{ matrix.target }}-unknown-linux-gnu --out dist -i $PYTHON_PATH
         fi
         
     - name: List built wheels
