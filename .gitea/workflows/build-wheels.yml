@@ -47,7 +47,7 @@ jobs:
       run: |
         # Run a quick benchmark to ensure no major performance regressions
         # Set shorter benchmark duration for CI speed
-        CRITERION_SAMPLE_SIZE=10 timeout 180 cargo bench --bench bitemporal_benchmarks || echo "Benchmark completed or timed out"
+        CRITERION_SAMPLE_SIZE=10 cargo bench --bench bitemporal_benchmarks
 
   build-linux-wheels:
     needs: test  # Only run if tests pass
@@ -69,19 +69,6 @@ jobs:
       with:
         targets: ${{ matrix.target }}-unknown-linux-gnu
         
-    - name: Install cross-compilation tools
-      if: matrix.target == 'aarch64'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
-        
-    - name: Set up cross-compilation environment
-      if: matrix.target == 'aarch64'
-      run: |
-        echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-        echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-        echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-        
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
       
@@ -97,11 +84,7 @@ jobs:
         PYTHON_PATH=$(which python3)
         echo "Using Python interpreter: $PYTHON_PATH"
         
-        if [ "${{ matrix.target }}" = "x86_64" ]; then
-          uv run maturin build --release --out dist --find-interpreter
-        else
-          uv run maturin build --release --target ${{ matrix.target }}-unknown-linux-gnu --out dist -i $PYTHON_PATH
-        fi
+        uv run maturin build --release --out dist --find-interpreter
         
     - name: List built wheels
       run: ls -la dist/
