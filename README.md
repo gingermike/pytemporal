@@ -270,7 +270,7 @@ uv run maturin develop
 - **arrow** (53.4) - Columnar data processing
 - **pyo3** (0.21) - Python bindings  
 - **chrono** (0.4) - Date/time handling
-- **xxhash-rust** (0.8) - Fast value hashing
+- **blake3** (1.5) - Cryptographic hashing
 - **rayon** (1.8) - Parallel processing
 - **criterion** (0.5) - Benchmarking framework
 
@@ -279,7 +279,7 @@ uv run maturin develop
 ### Rust Core
 - Zero-copy Arrow array processing
 - Parallel execution with Rayon
-- Hash-based change detection with xxHash
+- Hash-based change detection with BLAKE3
 - Post-processing conflation for optimal storage
 - Modular design with clear separation of concerns
 
@@ -306,4 +306,4 @@ MIT License - see LICENSE file for details.
 - [PyO3](https://pyo3.rs/) - Rust-Python bindings  
 - [Rayon](https://github.com/rayon-rs/rayon) - Data parallelism
 - [Criterion](https://github.com/bheisler/criterion.rs) - Benchmarking
-- [xxHash](https://github.com/Cyan4973/xxHash) - Fast hashing algorithm
+- [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) - Cryptographic hashing algorithm
