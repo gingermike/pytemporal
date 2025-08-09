@@ -130,8 +130,8 @@ jobs:
         cargo bench --bench bitemporal_benchmarks
         mkdir -p site
         cp -r target/criterion/report/* site/
-    - name: Upload Pages artifact  # uses v4 upload internally
-      uses: actions/upload-pages-artifact@v1
+    - name: Upload pages artifact
+      uses: actions/upload-pages-artifact@v3   # upgraded to v3
       with:
         path: site
 
@@ -147,5 +147,5 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
     - name: Deploy to GitHub Pages
-      uses: actions/deploy-pages@v4
+      uses: actions/deploy-pages@v4   # upgraded to v4
       id: deployment
