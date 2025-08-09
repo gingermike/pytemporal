@@ -3,51 +3,37 @@ name: Build and Publish Linux Wheels
 on:
   push:
     tags:
-      - 'v*'  # Trigger on version tags like v1.0.0
+      - 'v*'
   workflow_dispatch:
 
 jobs:
-  # -------------------------------------------------------
-  # 1. Run tests and a quick benchmark
-  # -------------------------------------------------------
   test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
     - name: Create virtual environment
       run: uv venv
-
     - name: Install maturin
       run: uv pip install maturin[patchelf]
-
     - name: Run Rust tests
       run: cargo test --verbose
-
     - name: Install Python dependencies and run Python tests
       run: |
         uv pip install pytest pandas pyarrow
         uv run maturin develop
         uv run python -m pytest tests/test_bitemporal.py -v
-
     - name: Run benchmarks (smoke test)
       run: |
         CRITERION_SAMPLE_SIZE=10 cargo bench --bench bitemporal_benchmarks
 
-  # -------------------------------------------------------
-  # 2. Build wheels (x86_64) and upload as artifacts
-  # -------------------------------------------------------
   build-linux-wheels:
     needs: test
     runs-on: ubuntu-latest
@@ -56,68 +42,50 @@ jobs:
         target: [x86_64]
     steps:
     - uses: actions/checkout@v4
-
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}-unknown-linux-gnu
-
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
     - name: Create virtual environment
       run: uv venv
-
     - name: Install maturin
       run: uv pip install maturin[patchelf]
-
     - name: Build wheel
       run: |
         PYTHON_PATH=$(which python3)
         echo "Using Python interpreter: $PYTHON_PATH"
         uv run maturin build --release --out dist --find-interpreter
-
-    - name: List built wheels
-      run: ls -la dist/
-
     - name: Upload wheel as artifact
-      uses: actions/upload-artifact@v4   # Use v4 (v3 is deprecated)
+      uses: actions/upload-artifact@v4
       with:
         name: wheels-linux-${{ matrix.target }}
         path: dist/*.whl
 
-  # -------------------------------------------------------
-  # 3. Publish a GitHub release when tagging
-  # -------------------------------------------------------
   publish-release:
     needs: build-linux-wheels
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
-      contents: write  # Needed for creating releases
+      contents: write
     steps:
     - uses: actions/checkout@v4
-
-    - name: Download all wheel artifacts
-      uses: actions/download-artifact@v4  # Use v4 (v3 is deprecated)
+    - name: Download wheel artifacts
+      uses: actions/download-artifact@v4
       with:
         path: dist-all/
-
     - name: Flatten wheel directory
       run: |
         mkdir -p dist/
         find dist-all/ -name "*.whl" -exec cp {} dist/ \;
-        ls -la dist/
-
     - name: Extract version from tag
       id: version
       run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
     - name: Upload GitHub Release
       uses: softprops/action-gh-release@v1
       with:
@@ -130,7 +98,7 @@ jobs:
           ```bash
           pip install --no-index --find-links="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" bitemporal-timeseries==${{ steps.version.outputs.VERSION }}
           ```
-          
+
           ## Features
           - High-performance bitemporal timeseries processing
           - Microsecond precision timestamps for audit trails
@@ -139,44 +107,45 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # -------------------------------------------------------
-  # 4. Generate Criterion benchmark reports and publish them to GitHub Pages
-  # -------------------------------------------------------
   benchmarks:
     needs: test
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
     - uses: actions/checkout@v4
-
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
     - name: Create virtual environment
       run: uv venv
-
     - name: Install maturin
       run: uv pip install maturin[patchelf]
-
     - name: Run Criterion benchmarks (generate HTML reports)
-      run: cargo bench --bench bitemporal_benchmarks
-
-    - name: Prepare site directory
       run: |
+        cargo bench --bench bitemporal_benchmarks
         mkdir -p site
-        # Copy the generated criterion report into a directory GitHub Pages expects
         cp -r target/criterion/report/* site/
-
-    - name: Deploy site to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
+    - name: Upload Pages artifact  # uses v4 upload internally
+      uses: actions/upload-pages-artifact@v1
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: site
+        path: site
+
+  deploy-benchmarks:
+    needs: benchmarks
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      uses: actions/deploy-pages@v4
+      id: deployment
