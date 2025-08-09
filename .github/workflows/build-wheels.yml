@@ -1,0 +1,144 @@
+name: Build and Publish Linux Wheels
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        cache-dependency-path: '**/pyproject.toml'
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Create virtual environment
+      run: uv venv
+
+    - name: Install maturin
+      run: uv pip install maturin[patchelf]
+
+    - name: Run Rust tests
+      run: cargo test --verbose
+
+    - name: Install Python dependencies and run Python tests
+      run: |
+        # Install Python dependencies needed for testing
+        uv pip install pytest pandas pyarrow
+        
+        # Build the Python module for testing (development mode)
+        uv run maturin develop
+        
+        # Run Python tests
+        uv run python -m pytest tests/test_bitemporal.py -v
+
+    - name: Run benchmarks (smoke test)
+      run: |
+        # Run a quick benchmark to ensure no major performance regressions
+        # Set shorter benchmark duration for CI speed
+        CRITERION_SAMPLE_SIZE=10 cargo bench --bench bitemporal_benchmarks
+
+  build-linux-wheels:
+    needs: test  # Only run if tests pass
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        cache-dependency-path: '**/pyproject.toml'
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}-unknown-linux-gnu
+
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    - name: Create virtual environment
+      run: uv venv
+
+    - name: Install maturin
+      run: uv pip install maturin[patchelf]
+
+    - name: Build wheel
+      run: |
+        # Find the Python interpreter path
+        PYTHON_PATH=$(which python3)
+        echo "Using Python interpreter: $PYTHON_PATH"
+        
+        uv run maturin build --release --out dist --find-interpreter
+
+    - name: List built wheels
+      run: ls -la dist/
+
+    - name: Upload wheel as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: wheels-linux-${{ matrix.target }}
+        path: dist/*.whl
+
+  publish-release:
+    needs: build-linux-wheels
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')  # Only publish on version tags
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all wheel artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: dist-all/
+
+    - name: Flatten wheel directory
+      run: |
+        mkdir -p dist/
+        find dist-all/ -name "*.whl" -exec cp {} dist/ \;
+        ls -la dist/
+
+    - name: Extract version from tag
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Upload GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ steps.version.outputs.VERSION }}
+        files: dist/*.whl
+        generate_release_notes: true
+        body: |
+          ## Installation
+          ```bash
+          pip install --no-index --find-links="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" bitemporal-timeseries==${{ steps.version.outputs.VERSION }}
+          ```
+
+          ## Features
+          - High-performance bitemporal timeseries processing
+          - Microsecond precision timestamps for audit trails
+          - Conflation optimization for reduced storage
+          - Adaptive parallelisation for large datasets
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
