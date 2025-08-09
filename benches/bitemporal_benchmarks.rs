@@ -217,8 +217,19 @@ fn bench_conflation_effectiveness(c: &mut Criterion) {
 
 fn bench_scaling_by_size(c: &mut Criterion) {
     let mut group = c.benchmark_group("scaling_by_dataset_size");
-    
-    for size in [10, 50, 100, 500, 500000].iter() {
+
+    for size in [10, 50, 100, 500, 500_000].iter() {
+        // Adjust the sample size based on the dataset size. Larger datasets
+        // take longer per iteration, so we reduce the number of samples to
+        // keep total benchmark time reasonable. Tune these values as needed.
+        let sample_size = match *size {
+            500_000 => 10,
+            500     => 10,
+            100     => 20,
+            _       => 30,
+        };
+        group.sample_size(sample_size);
+
         let mut current_data = Vec::new();
         for i in 0..*size {
             current_data.push((
@@ -227,7 +238,7 @@ fn bench_scaling_by_size(c: &mut Criterion) {
                 100 + i,
                 1000 + i,
                 "2024-01-01",
-                "2024-12-31", 
+                "2024-12-31",
                 "2024-01-01",
                 "max"
             ));
@@ -237,7 +248,7 @@ fn bench_scaling_by_size(c: &mut Criterion) {
         let num_updates = size / 5; // 20% of records get updates
         for i in 0..num_updates {
             update_data.push((
-                i / 2,  
+                i / 2,
                 "field",
                 999,
                 9999,
@@ -250,7 +261,6 @@ fn bench_scaling_by_size(c: &mut Criterion) {
 
         let current_state = create_test_batch(current_data).unwrap();
         let updates = create_test_batch(update_data).unwrap();
-
         let system_date = NaiveDate::from_ymd_opt(2024, 7, 21).unwrap();
         let id_columns = vec!["id".to_string(), "field".to_string()];
         let value_columns = vec!["mv".to_string(), "price".to_string()];
@@ -268,6 +278,7 @@ fn bench_scaling_by_size(c: &mut Criterion) {
             })
         });
     }
+
     group.finish();
 }
 

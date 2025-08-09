@@ -3,96 +3,66 @@ name: Build and Publish Linux Wheels
 on:
   push:
     tags:
-      - 'v*'  # Trigger on version tags like v1.0.0
-  workflow_dispatch:  # Allow manual triggering
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-        cache: 'pip'
-        cache-dependency-path: '**/pyproject.toml'
-
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
     - name: Create virtual environment
       run: uv venv
-
     - name: Install maturin
       run: uv pip install maturin[patchelf]
-
     - name: Run Rust tests
       run: cargo test --verbose
-
     - name: Install Python dependencies and run Python tests
       run: |
-        # Install Python dependencies needed for testing
         uv pip install pytest pandas pyarrow
-        
-        # Build the Python module for testing (development mode)
         uv run maturin develop
-        
-        # Run Python tests
         uv run python -m pytest tests/test_bitemporal.py -v
-
     - name: Run benchmarks (smoke test)
       run: |
-        # Run a quick benchmark to ensure no major performance regressions
-        # Set shorter benchmark duration for CI speed
         CRITERION_SAMPLE_SIZE=10 cargo bench --bench bitemporal_benchmarks
 
   build-linux-wheels:
-    needs: test  # Only run if tests pass
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
         target: [x86_64]
-
     steps:
     - uses: actions/checkout@v4
-
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-        cache: 'pip'
-        cache-dependency-path: '**/pyproject.toml'
-
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}-unknown-linux-gnu
-
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
     - name: Create virtual environment
       run: uv venv
-
     - name: Install maturin
       run: uv pip install maturin[patchelf]
-
     - name: Build wheel
       run: |
-        # Find the Python interpreter path
         PYTHON_PATH=$(which python3)
         echo "Using Python interpreter: $PYTHON_PATH"
-        
         uv run maturin build --release --out dist --find-interpreter
-
     - name: List built wheels
       run: ls -la dist/
-
     - name: Upload wheel as artifact
       uses: actions/upload-artifact@v3
       with:
@@ -102,26 +72,21 @@ jobs:
   publish-release:
     needs: build-linux-wheels
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')  # Only publish on version tags
-
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
     - uses: actions/checkout@v4
-
     - name: Download all wheel artifacts
       uses: actions/download-artifact@v3
       with:
         path: dist-all/
-
     - name: Flatten wheel directory
       run: |
         mkdir -p dist/
         find dist-all/ -name "*.whl" -exec cp {} dist/ \;
         ls -la dist/
-
     - name: Extract version from tag
       id: version
       run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
     - name: Upload GitHub Release
       uses: softprops/action-gh-release@v1
       with:
@@ -142,3 +107,49 @@ jobs:
           - Adaptive parallelisation for large datasets
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Generate Criterion benchmark reports and publish them to GitHub Pages
+  benchmarks:
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Install uv
+      run: curl -LsSf https://astral.sh/uv/install.sh | sh
+    - name: Create virtual environment
+      run: uv venv
+    - name: Install maturin
+      run: uv pip install maturin[patchelf]
+    - name: Run Criterion benchmarks (generate HTML reports)
+      run: |
+        # Run benchmarks; the HTML report is written under target/criterion/report
+        cargo bench --bench bitemporal_benchmarks
+    - name: Prepare site directory
+      run: |
+        mkdir -p site
+        cp -r target/criterion/report/* site/
+    - name: Upload pages artifact
+      uses: actions/upload-pages-artifact@v1
+      with:
+        path: site
+
+  deploy-benchmarks:
+    needs: benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      uses: actions/deploy-pages@v1
+      id: deployment
