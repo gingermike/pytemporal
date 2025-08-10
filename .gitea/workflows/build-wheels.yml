@@ -1,10 +1,13 @@
 name: Build and Publish Linux Wheels
 
+# This workflow is for PRODUCTION RELEASES only
+# For performance monitoring and flamegraphs, see .github/workflows/benchmarks.yml
+
 on:
   push:
     tags:
       - 'v*'  # Trigger on version tags like v1.0.0
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch:  # Allow manual triggering for testing
 
 jobs:
   test:
@@ -43,11 +46,11 @@ jobs:
         # Run Python tests
         uv run python -m pytest tests/test_bitemporal.py -v
         
-    - name: Run benchmarks (smoke test)
+    - name: Build release binary (smoke test)
       run: |
-        # Run a quick benchmark to ensure no major performance regressions
-        # Set shorter benchmark duration for CI speed
-        CRITERION_SAMPLE_SIZE=10 cargo bench --bench bitemporal_benchmarks
+        # Build release binary to ensure it compiles correctly
+        # This catches any release-specific compilation issues
+        cargo build --release
 
   build-linux-wheels:
     needs: test  # Only run if tests pass

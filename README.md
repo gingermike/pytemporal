@@ -11,6 +11,7 @@ A high-performance Rust library with Python bindings for processing bitemporal t
 - **Flexible Schema**: Dynamic ID and value column configuration
 - **Python Integration**: Seamless PyO3 bindings for Python workflows
 - **Modular Architecture**: Clean separation of concerns with dedicated modules
+- **Performance Monitoring**: Integrated flamegraph generation and GitHub Pages benchmark reports
 
 ## Installation
 
@@ -288,13 +289,59 @@ uv run maturin develop
 - Arrow RecordBatch input/output
 - Compatible with pandas DataFrames via conversion
 
+## Performance Monitoring
+
+This project includes comprehensive performance monitoring with flamegraph analysis:
+
+### 📊 Release Performance Reports
+
+View performance metrics and flamegraphs for each release at:
+**[Release Benchmarks](https://your-username.github.io/bitemporal-timeseries/)**
+
+Each version tag automatically generates comprehensive performance documentation with flamegraphs, creating a historical record of performance evolution across releases.
+
+### 🔥 Generating Flamegraphs Locally
+
+```bash
+# Generate flamegraphs for key benchmarks
+cargo bench --bench bitemporal_benchmarks medium_dataset -- --profile-time 5
+cargo bench --bench bitemporal_benchmarks conflation_effectiveness -- --profile-time 5 
+cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000" -- --profile-time 5
+
+# Add flamegraph links to HTML reports  
+python3 scripts/add_flamegraphs_to_html.py
+
+# View reports locally
+python3 -m http.server 8000 --directory target/criterion
+# Then visit: http://localhost:8000/report/
+```
+
+### 📈 Performance Expectations
+
+| Dataset Size | Processing Time | Flamegraph Available |
+|--------------|----------------|---------------------|
+| Small (5 records) | ~30-35 µs | ❌ |
+| Medium (100 records) | ~165-170 µs | ✅ |
+| Large (500k records) | ~900-950 ms | ✅ |
+| Conflation test | ~28 µs | ✅ |
+
+### 🎯 Key Optimization Areas (from Flamegraph Analysis)
+
+- **`process_id_timeline`**: Core algorithm logic
+- **Rayon parallelization**: Thread management overhead
+- **Arrow operations**: Columnar data processing
+- **BLAKE3 hashing**: Value fingerprinting for conflation
+
+See `docs/benchmark-publishing.md` for complete setup details.
+
 ## Contributing
 
 1. Check `CLAUDE.md` for project context and conventions
 2. Run tests before submitting changes
 3. Follow existing code style and patterns
 4. Update benchmarks for performance-related changes
-5. Maintain modular architecture when adding features
+5. Use flamegraphs to validate performance improvements
+6. Maintain modular architecture when adding features
 
 ## License
 

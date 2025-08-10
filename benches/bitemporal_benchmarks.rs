@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use pprof::criterion::{Output, PProfProfiler};
 use bitemporal_timeseries::*;
 use chrono::NaiveDate;
 use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array};
@@ -347,12 +348,13 @@ fn bench_parallel_effectiveness(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches, 
-    bench_small_dataset, 
-    bench_medium_dataset, 
-    bench_conflation_effectiveness,
-    bench_scaling_by_size,
-    bench_parallel_effectiveness
-);
+fn profiled() -> Criterion {
+    Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)))
+}
+
+criterion_group! {
+    name = benches;
+    config = profiled();
+    targets = bench_small_dataset, bench_medium_dataset, bench_conflation_effectiveness, bench_scaling_by_size, bench_parallel_effectiveness
+}
 criterion_main!(benches);
