@@ -119,7 +119,7 @@ jobs:
           ```
 
           ## Performance Documentation
-          📊 **[View Interactive Benchmark Reports](https://your-username.github.io/bitemporal-timeseries/)**
+          📊 **[View Interactive Benchmark Reports](https://gingermike.github.io/bitemporal-timeseries/)**
           
           📦 **Download Complete Benchmark Data**: `benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip` (includes flamegraphs)
 
