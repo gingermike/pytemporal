@@ -129,7 +129,7 @@ jobs:
       run: |
         cargo bench --bench bitemporal_benchmarks
         mkdir -p site
-        cp -r target/criterion/report/* site/
+        cp -r target/criterion/* site/
     - name: Upload pages artifact
       uses: actions/upload-pages-artifact@v3   # upgraded to v3
       with:
