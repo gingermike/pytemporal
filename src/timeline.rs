@@ -230,16 +230,7 @@ pub fn emit_segment(
         original_index: None,
     };
 
-    // Check if we can conflate with the last inserted batch
-    if let Some(last_batch) = insert_batches.last_mut() {
-        if crate::conflation::can_conflate_with_last_batch(last_batch, &segment_record)? {
-            // Extend the last batch's effective_to instead of creating a new batch
-            crate::conflation::extend_batch_effective_to(last_batch, to_date)?;
-            return Ok(());
-        }
-    }
-
-    // Create new batch since we can't conflate
+    // Create new batch since segments require synthetic records
     let batch = if use_current_batch {
         crate::batch_utils::create_record_batch_from_record(
             &segment_record,

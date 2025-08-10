@@ -103,3 +103,88 @@ pub const MAX_TIMESTAMP: NaiveDateTime = match NaiveDate::from_ymd_opt(2262, 4, 
     },
     None => panic!("Invalid max date"),
 };
+
+/// Batch collector that accumulates records to process them in batches instead of individually
+#[derive(Debug)]
+pub struct BatchCollector {
+    /// Records to be processed from current state
+    pub current_records: Vec<BitemporalRecord>,
+    /// Source row indices for current_records
+    pub current_source_rows: Vec<usize>,
+    /// Records to be processed from updates
+    pub update_records: Vec<BitemporalRecord>,  
+    /// Source row indices for update_records
+    pub update_source_rows: Vec<usize>,
+}
+
+impl BatchCollector {
+    pub fn new() -> Self {
+        Self {
+            current_records: Vec::new(),
+            current_source_rows: Vec::new(),
+            update_records: Vec::new(),
+            update_source_rows: Vec::new(),
+        }
+    }
+    
+    pub fn add_current_record(&mut self, record: BitemporalRecord, source_row: usize) {
+        self.current_records.push(record);
+        self.current_source_rows.push(source_row);
+    }
+    
+    pub fn add_update_record(&mut self, record: BitemporalRecord, source_row: usize) {
+        self.update_records.push(record);
+        self.update_source_rows.push(source_row);
+    }
+    
+    /// For temporary compatibility - directly add a RecordBatch
+    pub fn add_batch(&mut self, _batch: RecordBatch) {
+        // For now, this is a no-op since we're using it just for segments
+        // In a full implementation, we'd collect these batches too
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.current_records.is_empty() && self.update_records.is_empty()
+    }
+    
+    pub fn len(&self) -> usize {
+        self.current_records.len() + self.update_records.len()
+    }
+    
+    /// Flush accumulated records into RecordBatches and clear the collector
+    pub fn flush(
+        &mut self, 
+        current_batch: &RecordBatch, 
+        updates_batch: &RecordBatch
+    ) -> Result<Vec<RecordBatch>, String> {
+        let mut batches = Vec::new();
+        
+        // Create batch from current records
+        if !self.current_records.is_empty() {
+            let batch = crate::batch_utils::create_record_batch_from_records(
+                &self.current_records,
+                current_batch,
+                &self.current_source_rows,
+            )?;
+            batches.push(batch);
+        }
+        
+        // Create batch from update records  
+        if !self.update_records.is_empty() {
+            let batch = crate::batch_utils::create_record_batch_from_records(
+                &self.update_records,
+                updates_batch,
+                &self.update_source_rows,
+            )?;
+            batches.push(batch);
+        }
+        
+        // Clear accumulated records
+        self.current_records.clear();
+        self.current_source_rows.clear();
+        self.update_records.clear();
+        self.update_source_rows.clear();
+        
+        Ok(batches)
+    }
+}

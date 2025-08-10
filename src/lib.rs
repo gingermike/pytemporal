@@ -14,7 +14,7 @@ mod batch_utils;
 pub use types::*;
 use timeline::process_id_timeline;
 use conflation::{deduplicate_record_batches, simple_conflate_batches};
-use batch_utils::{hash_values, extract_date_as_datetime, extract_timestamp, create_record_batch_from_update};
+use batch_utils::{hash_values, extract_date_as_datetime, extract_timestamp};
 
 pub fn process_updates(
     current_state: RecordBatch,
@@ -96,7 +96,7 @@ pub fn process_updates(
         .collect();
     
     // Use parallel processing for large datasets to improve CPU utilization
-    let use_parallel = id_groups.len() > 50 || 
+    let use_parallel = id_groups.len() > 50 ||
                       (current_state.num_rows() + updates.num_rows()) > 10000;
     
     if use_parallel {
@@ -194,12 +194,15 @@ fn process_id_group(
             }
         }
         
-        // Insert each update record exactly as provided
-        for update_record in &update_records {
-            let batch = create_record_batch_from_update(
+        // Insert all update records as a batch
+        if !update_records.is_empty() {
+            let records: Vec<BitemporalRecord> = update_records.iter().cloned().collect();
+            let source_rows: Vec<usize> = update_records.iter().map(|r| r.original_index.unwrap()).collect();
+            
+            let batch = crate::batch_utils::create_record_batch_from_records(
+                &records,
                 updates,
-                update_record.original_index.unwrap(),
-                update_record,
+                &source_rows,
             )?;
             insert_batches.push(batch);
         }

@@ -41,18 +41,22 @@ pub fn process_non_overlapping_updates(
     updates: &[&BitemporalRecord],
     updates_batch: &RecordBatch,
 ) -> Result<Vec<RecordBatch>, String> {
-    let mut insert_batches = Vec::new();
-    
-    for update_record in updates {
-        let batch = crate::batch_utils::create_record_batch_from_update(
-            updates_batch,
-            update_record.original_index.unwrap(),
-            update_record,
-        )?;
-        insert_batches.push(batch);
+    if updates.is_empty() {
+        return Ok(Vec::new());
     }
     
-    Ok(insert_batches)
+    // Collect all update records and their source rows
+    let records: Vec<BitemporalRecord> = updates.iter().map(|&r| (*r).clone()).collect();
+    let source_rows: Vec<usize> = updates.iter().map(|r| r.original_index.unwrap()).collect();
+    
+    // Create a single batch from all non-overlapping updates
+    let batch = crate::batch_utils::create_record_batch_from_records(
+        &records,
+        updates_batch,
+        &source_rows,
+    )?;
+    
+    Ok(vec![batch])
 }
 
 /// Categorizes updates and current records based on overlap relationships
