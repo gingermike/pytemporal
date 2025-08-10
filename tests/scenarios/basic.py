@@ -1,7 +1,7 @@
 from typing import Tuple, List
 from pandas import to_datetime as pdt
 
-from bitemporal_timeseries import POSTGRES_INFINITY
+from bitemporal_timeseries import INFINITY_TIMESTAMP
 from tests.scenarios.defaults import pdt_now, pd_max, pdt_past, BitemporalScenario
 
 
@@ -60,15 +60,15 @@ def _unrelated_state() -> Tuple[List, List, Tuple]:
             [1234, "fielda", 400, 500, pdt("2020-01-01"), pdt("2021-01-01"), pdt_past, pd_max],
         ],
         [
-            [4562, "test", 1, 1, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
-            [1234, "test", 2, 2, pdt("2022-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
+            [4562, "test", 1, 1, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max],
+            [1234, "test", 2, 2, pdt("2022-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max],
             [1234, "fielda", 400, 500, pdt("2022-01-01"), pdt("2023-01-01"), pdt_past, pd_max],
         ],
         (
             [],
             [
-                [4562, "test", 1, 1, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
-                [1234, "test", 2, 2, pdt("2022-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
+                [4562, "test", 1, 1, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max],
+                [1234, "test", 2, 2, pdt("2022-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max],
                 [1234, "fielda", 400, 500, pdt("2022-01-01"), pdt("2023-01-01"), pdt_past, pd_max],
             ]
         )
@@ -81,18 +81,18 @@ def _append_tail() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
-            [1234, "test", 2, 2, pdt("2022-06-30"), POSTGRES_INFINITY, pdt_now, pd_max]
+            [1234, "test", 2, 2, pdt("2022-06-30"), INFINITY_TIMESTAMP, pdt_now, pd_max]
         ],
         (
             [
-                [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+                [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
             ],
             [
                 [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2022-06-30"), pdt_now, pd_max],
-                [1234, "test", 2, 2, pdt("2022-06-30"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 2, 2, pdt("2022-06-30"), INFINITY_TIMESTAMP, pdt_now, pd_max]
             ]
         )
     )
@@ -107,12 +107,12 @@ def _append_tail_exact() -> Tuple[List, List, Tuple]:
             [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-06-30"), pdt_past, pd_max],
         ],
         [
-            [1234, "test", 2, 2, pdt("2022-06-30"), POSTGRES_INFINITY, pdt_now, pd_max]
+            [1234, "test", 2, 2, pdt("2022-06-30"), INFINITY_TIMESTAMP, pdt_now, pd_max]
         ],
         (
             [],
             [
-                [1234, "test", 2, 2, pdt("2022-06-30"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 2, 2, pdt("2022-06-30"), INFINITY_TIMESTAMP, pdt_now, pd_max]
             ]
         )
     )
@@ -124,18 +124,18 @@ def _append_head() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
             [1234, "test", 2, 2, pdt("2019-06-30"), pdt("2021-01-01"), pdt_now, pd_max]
         ],
         (
             [
-                [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max]
+                [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max]
             ],
             [
                 [1234, "test", 2, 2, pdt("2019-06-30"), pdt("2021-01-01"), pdt_now, pd_max],
-                [1234, "test", 300, 400, pdt("2021-01-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 300, 400, pdt("2021-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max]
             ]
         )
     )
@@ -147,7 +147,7 @@ def _append_head_exact() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
             [1234, "test", 2, 2, pdt("2019-06-30"), pdt("2020-01-01"), pdt_now, pd_max]
@@ -167,19 +167,19 @@ def _intersect() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
             [1234, "test", 2, 2, pdt("2021-01-01"), pdt("2021-06-01"), pdt_now, pd_max]
         ],
         (
             [
-                [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+                [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
             ],
             [
                 [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2021-01-01"), pdt_now, pd_max],
                 [1234, "test", 2, 2, pdt("2021-01-01"), pdt("2021-06-01"), pdt_now, pd_max],
-                [1234, "test", 300, 400, pdt("2021-06-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 300, 400, pdt("2021-06-01"), INFINITY_TIMESTAMP, pdt_now, pd_max]
             ]
         )
     )
@@ -191,10 +191,10 @@ def _no_change() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
-            [1234, "test", 300, 400, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+            [1234, "test", 300, 400, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max]
         ],
         (
             [],

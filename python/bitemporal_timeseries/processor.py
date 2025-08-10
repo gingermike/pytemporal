@@ -1,10 +1,8 @@
 """
-Bitemporal timeseries processor with PostgreSQL infinity date support.
+Bitemporal timeseries processor.
 
-This module handles the conversion between PostgreSQL's infinity timestamps
-and pandas-compatible dates. Internally, we use pandas' maximum timestamp
-(approximately 2262-04-11) to represent unbounded dates, then convert to
-PostgreSQL's infinity representation (9999-12-31) when outputting data.
+This module provides a high-level interface for processing bitemporal timeseries
+data using the underlying Rust implementation.
 """
 import pyarrow as pa
 import pandas as pd
@@ -14,8 +12,8 @@ from datetime import datetime, date
 # Import the Rust compute_changes function
 from .bitemporal_timeseries import compute_changes as _compute_changes
 
-# PostgreSQL infinity date representation - use a safe date that doesn't overflow pandas
-POSTGRES_INFINITY = pd.Timestamp('2260-12-31 23:59:59')
+# Infinity date representation - use a safe date that doesn't overflow pandas
+INFINITY_TIMESTAMP = pd.Timestamp('2260-12-31 23:59:59')
 
 # Pandas maximum timestamp (approximately 2262-04-11)
 PANDAS_MAX_TIMESTAMP = pd.Timestamp.max
@@ -124,11 +122,11 @@ class BitemporalTimeseriesProcessor:
     
     def _prepare_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Prepare DataFrame for processing by converting PostgreSQL infinity dates.
+        Prepare DataFrame for processing by converting infinity dates.
         """
         df = df.copy()
         
-        # Convert PostgreSQL infinity to pandas max timestamp for internal processing
+        # Convert infinity to pandas max timestamp for internal processing
         effective_date_columns = ['effective_from', 'effective_to']
         as_of_timestamp_columns = ['as_of_from', 'as_of_to']
         
@@ -137,7 +135,7 @@ class BitemporalTimeseriesProcessor:
             if col in df.columns:
                 # Replace null with pandas max timestamp
                 df[col] = df[col].fillna(PANDAS_MAX_TIMESTAMP)
-                # Replace PostgreSQL infinity with pandas max timestamp
+                # Replace infinity with pandas max timestamp
                 df[col] = pd.to_datetime(df[col])
                 df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
                 
@@ -148,7 +146,7 @@ class BitemporalTimeseriesProcessor:
             if col in df.columns:
                 # Replace null with pandas max timestamp
                 df[col] = df[col].fillna(PANDAS_MAX_TIMESTAMP)
-                # Replace PostgreSQL infinity with pandas max timestamp
+                # Replace infinity with pandas max timestamp
                 df[col] = pd.to_datetime(df[col])
                 df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
                 
@@ -223,7 +221,7 @@ class BitemporalTimeseriesProcessor:
     
     def _convert_from_internal_format(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Convert from internal format back to PostgreSQL format.
+        Convert from internal format back to external format.
         """
         df = df.copy()
         
@@ -274,12 +272,12 @@ class BitemporalTimeseriesProcessor:
                     infinity_mask = is_nat_mask | is_large_date_mask | is_max_timestamp_mask
                     
                     if infinity_mask.any():
-                        # Replace infinity values with PostgreSQL infinity date
-                        df.loc[infinity_mask, col] = POSTGRES_INFINITY
+                        # Replace infinity values with infinity date
+                        df.loc[infinity_mask, col] = INFINITY_TIMESTAMP
                         
                 except (pd.errors.OutOfBoundsDatetime, OverflowError, AttributeError):
                     # If any conversion fails due to overflow, assume entire column needs infinity
-                    df[col] = POSTGRES_INFINITY
+                    df[col] = INFINITY_TIMESTAMP
         
         return df
     
@@ -291,163 +289,3 @@ class BitemporalTimeseriesProcessor:
                            ['effective_from', 'effective_to', 'as_of_from', 'as_of_to'])
         return required_cols.issubset(set(df.columns))
 
-
-# Helper function for PostgreSQL integration
-def apply_changes_to_postgres(
-    connection,
-    rows_to_expire: pd.DataFrame,
-    rows_to_insert: pd.DataFrame,
-    table_name: str = 'timeseries_data',
-    id_column: str = 'id'
-):
-    """
-    Apply bitemporal changes to PostgreSQL database.
-    
-    This function handles the conversion between pandas timestamps and PostgreSQL
-    infinity values. The rows_to_insert DataFrame should already have POSTGRES_INFINITY
-    values for unbounded dates (as returned by compute_changes).
-    
-    Args:
-        connection: psycopg2 connection or SQLAlchemy engine
-        rows_to_expire: DataFrame with rows to expire
-        rows_to_insert: DataFrame with rows to insert
-        table_name: Name of the target table
-        id_column: Primary key column name
-    """
-    from psycopg2.extras import execute_batch
-    
-    with connection.begin() if hasattr(connection, 'begin') else connection:
-        cur = connection.cursor() if hasattr(connection, 'cursor') else connection
-        
-        # Expire rows
-        if len(rows_to_expire) > 0:
-            expire_data = [
-                {
-                    'as_of_to': row['as_of_to'],
-                    'id': row[id_column]
-                }
-                for _, row in rows_to_expire.iterrows()
-            ]
-            
-            execute_batch(cur, f"""
-                UPDATE {table_name} 
-                SET as_of_to = %(as_of_to)s 
-                WHERE {id_column} = %(id)s
-            """, expire_data)
-        
-        # Insert new rows
-        if len(rows_to_insert) > 0:
-            # Convert DataFrame to list of dicts
-            insert_data = rows_to_insert.to_dict('records')
-            
-            # Build insert query dynamically based on columns
-            columns = list(rows_to_insert.columns)
-            placeholders = ', '.join([f'%({col})s' for col in columns])
-            column_names = ', '.join(columns)
-            
-            execute_batch(cur, f"""
-                INSERT INTO {table_name} ({column_names})
-                VALUES ({placeholders})
-            """, insert_data)
-        
-        if hasattr(connection, 'commit'):
-            connection.commit()
-
-
-# Performance optimization function for large datasets
-def process_large_dataset_with_batching(
-    processor: BitemporalTimeseriesProcessor,
-    current_state_query: str,
-    updates_query: str,
-    connection,
-    batch_size: int = 50000
-):
-    """
-    Process very large datasets by batching.
-    
-    Args:
-        processor: BitemporalTimeseriesProcessor instance
-        current_state_query: SQL query for current state
-        updates_query: SQL query for updates
-        connection: Database connection
-        batch_size: Number of rows to process at once
-    """
-    import math
-    
-    # Get total count
-    total_updates = pd.read_sql_query(
-        f"SELECT COUNT(*) as cnt FROM ({updates_query}) t", 
-        connection
-    ).iloc[0]['cnt']
-    
-    num_batches = math.ceil(total_updates / batch_size)
-    
-    for batch_num in range(num_batches):
-        offset = batch_num * batch_size
-        
-        # Read current state for relevant IDs only
-        batch_updates = pd.read_sql_query(
-            f"{updates_query} LIMIT {batch_size} OFFSET {offset}",
-            connection
-        )
-        
-        # Build ID filter for current state
-        id_conditions = []
-        for _, row in batch_updates.iterrows():
-            cond = " AND ".join([
-                f"{col} = '{row[col]}'" 
-                for col in processor.id_columns
-            ])
-            id_conditions.append(f"({cond})")
-        
-        id_filter = " OR ".join(id_conditions)
-        
-        # Read only relevant current state
-        current_batch = pd.read_sql_query(
-            f"{current_state_query} AND ({id_filter})",
-            connection
-        )
-        
-        # Process batch
-        to_expire, to_insert = processor.compute_changes(
-            current_batch,
-            batch_updates
-        )
-        
-        # Apply changes
-        apply_changes_to_postgres(
-            connection,
-            to_expire,
-            to_insert
-        )
-        
-        print(f"Processed batch {batch_num + 1}/{num_batches}")
-    
-    print("Batch processing complete")
-
-
-# Helper function to read data from PostgreSQL with infinity handling
-def read_from_postgres_with_infinity(query: str, connection) -> pd.DataFrame:
-    """
-    Read data from PostgreSQL and handle infinity timestamps.
-    
-    PostgreSQL's 'infinity' timestamps are automatically converted to NaT by pandas.
-    This function reads the data and replaces NaT with POSTGRES_INFINITY for
-    consistency with the library's expectations.
-    
-    Args:
-        query: SQL query to execute
-        connection: Database connection
-        
-    Returns:
-        DataFrame with infinity values properly represented
-    """
-    df = pd.read_sql_query(query, connection)
-    
-    # Replace NaT (from PostgreSQL infinity) with our POSTGRES_INFINITY constant
-    date_columns = ['effective_to', 'as_of_to']
-    for col in date_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna(POSTGRES_INFINITY)
-    
-    return df

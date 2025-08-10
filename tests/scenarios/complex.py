@@ -1,7 +1,7 @@
 from typing import Tuple, List
 from pandas import to_datetime as pdt
 
-from bitemporal_timeseries import POSTGRES_INFINITY
+from bitemporal_timeseries import INFINITY_TIMESTAMP
 from tests.scenarios.defaults import pdt_now, pd_max, pdt_past, BitemporalScenario
 
 
@@ -12,7 +12,7 @@ def _overlay_two() -> Tuple[List, List, Tuple]:
     return (
         [
             [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-06-30"), pdt_past, pd_max],
-            [1234, "test", 300, 400, pdt("2020-06-30"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 300, 400, pdt("2020-06-30"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
             [1234, "test", 2, 2, pdt("2020-03-01"), pdt("2020-11-01"), pdt_now, pd_max]
@@ -20,12 +20,12 @@ def _overlay_two() -> Tuple[List, List, Tuple]:
         (
             [
                 [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-06-30"), pdt_past, pd_max],
-                [1234, "test", 300, 400, pdt("2020-06-30"), POSTGRES_INFINITY, pdt_past, pd_max],
+                [1234, "test", 300, 400, pdt("2020-06-30"), INFINITY_TIMESTAMP, pdt_past, pd_max],
             ],
             [
                 [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-03-01"), pdt_now, pd_max],
                 [1234, "test", 2, 2, pdt("2020-03-01"), pdt("2020-11-01"), pdt_now, pd_max],
-                [1234, "test", 300, 400, pdt("2020-11-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 300, 400, pdt("2020-11-01"), INFINITY_TIMESTAMP, pdt_now, pd_max]
             ]
         )
     )
@@ -39,7 +39,7 @@ def _overlay_multiple() -> Tuple[List, List, Tuple]:
         [
             [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-06-30"), pdt_past, pd_max],
             [1234, "test", 200, 200, pdt("2020-06-30"), pdt("2020-07-31"), pdt_past, pd_max],
-            [1234, "test", 100, 100, pdt("2020-07-31"), POSTGRES_INFINITY, pdt_past, pd_max]
+            [1234, "test", 100, 100, pdt("2020-07-31"), INFINITY_TIMESTAMP, pdt_past, pd_max]
         ],
         [
             [1234, "test", 2, 2, pdt("2020-03-01"), pdt("2020-11-01"), pdt_now, pd_max]
@@ -48,12 +48,12 @@ def _overlay_multiple() -> Tuple[List, List, Tuple]:
             [
                 [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-06-30"), pdt_past, pd_max],
                 [1234, "test", 200, 200, pdt("2020-06-30"), pdt("2020-07-31"), pdt_past, pd_max],
-                [1234, "test", 100, 100, pdt("2020-07-31"), POSTGRES_INFINITY, pdt_past, pd_max]
+                [1234, "test", 100, 100, pdt("2020-07-31"), INFINITY_TIMESTAMP, pdt_past, pd_max]
             ],
             [
                 [1234, "test", 300, 400, pdt("2020-01-01"), pdt("2020-03-01"), pdt_now, pd_max],
                 [1234, "test", 2, 2, pdt("2020-03-01"), pdt("2020-11-01"), pdt_now, pd_max],
-                [1234, "test", 100, 100, pdt("2020-11-01"), POSTGRES_INFINITY, pdt_now, pd_max]
+                [1234, "test", 100, 100, pdt("2020-11-01"), INFINITY_TIMESTAMP, pdt_now, pd_max]
             ]
         )
     )
@@ -65,7 +65,7 @@ def _multi_intersection_single_point() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max]
+            [1234, "test", 100, 100, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max]
         ],
         [
             [1234, "test", 2, 2, pdt("2020-03-01"), pdt("2020-11-01"), pdt_now, pd_max],
@@ -74,14 +74,14 @@ def _multi_intersection_single_point() -> Tuple[List, List, Tuple]:
         ],
         (
             [
-                [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max]
+                [1234, "test", 100, 100, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max]
             ],
             [
                 [1234, "test", 100, 100, pdt("2020-01-01"), pdt("2020-03-01"), pdt_now, pd_max],
                 [1234, "test", 2, 2, pdt("2020-03-01"), pdt("2020-11-01"), pdt_now, pd_max],
                 [1234, "test", 3, 4, pdt("2020-11-01"), pdt("2020-12-01"), pdt_now, pd_max],
                 [1234, "test", 4, 5, pdt("2020-12-01"), pdt("2021-06-01"), pdt_now, pd_max],
-                [1234, "test", 100, 100, pdt("2021-06-01"), POSTGRES_INFINITY, pdt_now, pd_max],
+                [1234, "test", 100, 100, pdt("2021-06-01"), INFINITY_TIMESTAMP, pdt_now, pd_max],
             ]
         )
     )
@@ -179,17 +179,17 @@ def _extend_update() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 100, 100, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
             [1234, "test", 100, 100, pdt("2019-01-01"), pdt("2020-01-01"), pdt_now, pd_max],
         ],
         (
             [
-                [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+                [1234, "test", 100, 100, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
             ],
             [
-                [1234, "test", 100, 100, pdt("2019-01-01"), POSTGRES_INFINITY, pdt_now, pd_max],
+                [1234, "test", 100, 100, pdt("2019-01-01"), INFINITY_TIMESTAMP, pdt_now, pd_max],
             ]
         )
     )
@@ -201,7 +201,7 @@ def _no_change_with_intersection() -> Tuple[List, List, Tuple]:
     """
     return (
         [
-            [1234, "test", 100, 100, pdt("2020-01-01"), POSTGRES_INFINITY, pdt_past, pd_max],
+            [1234, "test", 100, 100, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
         ],
         [
             [1234, "test", 100, 100, pdt("2020-02-01"), pdt("2020-04-01"), pdt_now, pd_max],

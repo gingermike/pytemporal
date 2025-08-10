@@ -10,7 +10,6 @@ pyo3-arrow = "0.3"
 chrono = "0.4"
 blake3 = "1.5"
 rayon = "1.8"
-indexmap = "2.1"
 ordered-float = "4.2"
 
 [dev-dependencies]

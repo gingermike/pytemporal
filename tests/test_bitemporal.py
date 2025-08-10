@@ -7,7 +7,7 @@ import pandas as pd
 
 import pytest
 
-from bitemporal_timeseries import BitemporalTimeseriesProcessor, POSTGRES_INFINITY
+from bitemporal_timeseries import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
 from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
     append_head_exact, intersect, no_change
 from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \
@@ -80,7 +80,7 @@ def test_update_scenarios(current_state: List, updates: List, expected: Tuple[Li
                        check_dtype=False,
                        check_index_type=False)
 
-    assert all([x == POSTGRES_INFINITY for x in insert["as_of_to"].to_list()])
+    assert all([x == INFINITY_TIMESTAMP for x in insert["as_of_to"].to_list()])
     assert all([x > pd.Timestamp.now().normalize() for x in expire["as_of_to"].to_list()])
 
 

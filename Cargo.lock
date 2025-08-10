@@ -311,7 +311,6 @@ dependencies = [
  "blake3",
  "chrono",
  "criterion",
- "indexmap",
  "ordered-float",
  "pyo3",
  "pyo3-arrow",

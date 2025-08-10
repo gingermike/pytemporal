@@ -46,9 +46,8 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - `pyo3` (0.21) - Python bindings with extension-module feature
 - `pyo3-arrow` (0.3) - Arrow integration for Python
 - `chrono` (0.4) - Date/time handling
-- `xxhash-rust` (0.8) - Fast hashing for value fingerprints
+- `blake3` (1.5) - Fast hashing for value fingerprints
 - `rayon` (1.8) - Data parallelism
-- `indexmap` (2.1) - Ordered hash maps for deterministic processing
 - `ordered-float` (4.2) - Hash-able floating point values
 - `criterion` (0.5) - Professional benchmarking framework
 

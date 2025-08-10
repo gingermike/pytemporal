@@ -2,12 +2,11 @@
 from .bitemporal_timeseries import compute_changes
 
 # Import Python wrapper classes from the local processor module
-from .processor import BitemporalTimeseriesProcessor, POSTGRES_INFINITY, apply_changes_to_postgres
+from .processor import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
 
 __all__ = [
     'BitemporalTimeseriesProcessor', 
-    'POSTGRES_INFINITY', 
-    'apply_changes_to_postgres',
+    'INFINITY_TIMESTAMP', 
     'compute_changes'
 ]
 __version__ = '0.1.0'
