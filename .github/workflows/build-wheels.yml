@@ -181,16 +181,19 @@ jobs:
         cargo bench --bench bitemporal_benchmarks conflation_effectiveness -- --profile-time 3
         
         # Large dataset benchmark with shorter profiling to avoid timeout
-        timeout 300s cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000" -- --profile-time 2 || echo "⚠️ Large benchmark timed out - continuing"
+        cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000" -- --profile-time 2
         
-        echo "📊 Running additional benchmarks for completeness..."
         
         # Run smaller benchmarks without flamegraphs for speed
         cargo bench --bench bitemporal_benchmarks small_dataset
+        cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/10"
+        cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/50"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/100"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500"
         
-        # Run parallel effectiveness tests
+        # Run all parallel effectiveness scenarios
+        cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/few_ids_many_records"
+        cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/many_ids_few_records"
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/balanced_workload"
         
         echo "✅ All benchmarks completed"
