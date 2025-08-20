@@ -36,6 +36,7 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
             ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
             ScalarValue::Float64(f) => hasher_input.extend_from_slice(&f.0.to_le_bytes()),
             ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
+            ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
         }
     }
     
@@ -302,6 +303,7 @@ pub fn hash_values_batch(
                 ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
                 ScalarValue::Float64(f) => hasher_input.extend_from_slice(&f.0.to_le_bytes()),
                 ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
+                ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
             }
         }
         

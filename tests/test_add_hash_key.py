@@ -148,16 +148,89 @@ class TestAddHashKeyDataTypes:
         assert result['value_hash'].iloc[0] != result['value_hash'].iloc[2]
         assert result['value_hash'].iloc[0] != result['value_hash'].iloc[1]
     
+    def test_boolean_values(self):
+        """Test hash with Boolean values."""
+        df = pd.DataFrame({
+            'active': [True, False, True, False],
+            'verified': [False, True, True, False],
+            'enabled': [True, True, False, False]
+        })
+        
+        result = add_hash_key(df, ['active', 'verified'])
+        
+        # Check that Boolean hashing works
+        assert 'value_hash' in result.columns
+        assert result['value_hash'].dtype == np.int64
+        
+        # Different Boolean combinations should produce different hashes
+        hash_values = result['value_hash'].tolist()
+        unique_hashes = len(set(hash_values))
+        
+        # We have [True,False], [False,True], [True,True], [False,False] - all different
+        assert unique_hashes == 4
+        
+        # Test specific combinations
+        true_false_mask = (result['active'] == True) & (result['verified'] == False)
+        false_true_mask = (result['active'] == False) & (result['verified'] == True)
+        
+        assert result[true_false_mask]['value_hash'].iloc[0] != result[false_true_mask]['value_hash'].iloc[0]
+        
+    def test_boolean_consistency(self):
+        """Test that same Boolean values produce same hashes."""
+        df1 = pd.DataFrame({
+            'flag1': [True, False],
+            'flag2': [False, True]
+        })
+        
+        df2 = pd.DataFrame({
+            'flag1': [False, True, True],
+            'flag2': [True, False, False]
+        })
+        
+        result1 = add_hash_key(df1, ['flag1', 'flag2'])
+        result2 = add_hash_key(df2, ['flag1', 'flag2'])
+        
+        # [True, False] should produce same hash in both DataFrames
+        true_false_hash_1 = result1[(result1['flag1'] == True) & (result1['flag2'] == False)]['value_hash'].iloc[0]
+        true_false_hash_2 = result2[(result2['flag1'] == True) & (result2['flag2'] == False)]['value_hash'].iloc[0]
+        
+        assert true_false_hash_1 == true_false_hash_2
+        
+    def test_boolean_with_other_types(self):
+        """Test Boolean values mixed with other data types."""
+        df = pd.DataFrame({
+            'active': [True, False, True, False],
+            'count': [1, 2, 1, 2],
+            'name': ['A', 'B', 'C', 'D']
+        })
+        
+        # Test Boolean + Integer
+        result1 = add_hash_key(df, ['active', 'count'])
+        
+        # Rows with same [active, count] should have same hash
+        mask_true_1 = (result1['active'] == True) & (result1['count'] == 1)
+        true_1_rows = result1[mask_true_1]
+        if len(true_1_rows) > 1:
+            assert all(true_1_rows['value_hash'] == true_1_rows['value_hash'].iloc[0])
+        
+        # Test Boolean + String
+        result2 = add_hash_key(df, ['active', 'name'])
+        assert 'value_hash' in result2.columns
+        
+        # All should be different (unique combinations)
+        assert result2['value_hash'].nunique() == 4
+        
     def test_mixed_data_types(self):
-        """Test hash with mixed data types."""
+        """Test hash with mixed data types including Boolean."""
         df = pd.DataFrame({
             'str_col': ['A', 'B', 'A'],
             'int_col': [1, 2, 1],
             'float_col': [1.5, 2.5, 1.5],
+            'bool_col': [True, False, True],
             'date_col': pd.to_datetime(['2020-01-01', '2020-01-02', '2020-01-01'])
         })
         
-        result = add_hash_key(df, ['str_col', 'int_col', 'float_col', 'date_col'])
+        result = add_hash_key(df, ['str_col', 'int_col', 'float_col', 'bool_col', 'date_col'])
         
         # Row 0 and 2 should have identical hashes (all columns match)
         assert result['value_hash'].iloc[0] == result['value_hash'].iloc[2]
@@ -355,6 +428,29 @@ class TestAddHashKeyEdgeCases:
         assert 'value_hash' in result.columns
         # All should be different
         assert result['value_hash'].nunique() == 3
+    
+    def test_boolean_edge_cases(self):
+        """Test edge cases with Boolean values."""
+        # All True
+        df1 = pd.DataFrame({'flag': [True, True, True]})
+        result1 = add_hash_key(df1, ['flag'])
+        assert result1['value_hash'].nunique() == 1  # All should be same
+        
+        # All False  
+        df2 = pd.DataFrame({'flag': [False, False, False]})
+        result2 = add_hash_key(df2, ['flag'])
+        assert result2['value_hash'].nunique() == 1  # All should be same
+        
+        # Mixed
+        df3 = pd.DataFrame({'flag': [True, False, True]})
+        result3 = add_hash_key(df3, ['flag'])
+        assert result3['value_hash'].nunique() == 2  # Two unique values
+        
+        # Single Boolean column
+        df4 = pd.DataFrame({'active': [True]})
+        result4 = add_hash_key(df4, ['active'])
+        assert len(result4) == 1
+        assert result4['value_hash'].iloc[0] != 0
     
     def test_field_order_consistency(self):
         """Test that field order in value_fields matters."""

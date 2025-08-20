@@ -1,4 +1,4 @@
-use arrow::array::{Array, ArrayRef, Date32Array, TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray, TimestampMillisecondArray, RecordBatch, StringArray, Int32Array, Int64Array, Float64Array};
+use arrow::array::{Array, ArrayRef, Date32Array, TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray, TimestampMillisecondArray, RecordBatch, StringArray, Int32Array, Int64Array, Float64Array, BooleanArray};
 use arrow::datatypes::DataType;
 use chrono::{NaiveDate, NaiveDateTime};
 use ordered_float;
@@ -27,6 +27,7 @@ pub enum ScalarValue {
     Int64(i64),
     Float64(ordered_float::OrderedFloat<f64>),
     Date32(i32),
+    Boolean(bool),
 }
 
 impl ScalarValue {
@@ -76,6 +77,10 @@ impl ScalarValue {
                         ScalarValue::Int64(arr.value(idx))
                     }
                 }
+            }
+            DataType::Boolean => {
+                let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                ScalarValue::Boolean(arr.value(idx))
             }
             _ => panic!("Unsupported data type: {:?}", array.data_type()),
         }
