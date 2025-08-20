@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use pprof::criterion::{Output, PProfProfiler};
-use bitemporal_timeseries::*;
+use pytemporal::*;
 use chrono::NaiveDate;
 use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
