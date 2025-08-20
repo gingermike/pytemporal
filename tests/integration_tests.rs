@@ -1,4 +1,4 @@
-use bitemporal_timeseries::{process_updates, UpdateMode};
+use pytemporal::{process_updates, UpdateMode};
 use chrono::NaiveDate;
 use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};

@@ -115,11 +115,11 @@ jobs:
         body: |
           ## Installation
           ```bash
-          pip install --no-index --find-links="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" bitemporal-timeseries==${{ steps.version.outputs.VERSION }}
+          pip install --no-index --find-links="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}" pytemporal==${{ steps.version.outputs.VERSION }}
           ```
 
           ## Performance Documentation
-          📊 **[View Interactive Benchmark Reports](https://gingermike.github.io/bitemporal-timeseries/)**
+          📊 **[View Interactive Benchmark Reports](https://gingermike.github.io/pytemporal/)**
           
           📦 **Download Complete Benchmark Data**: `benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip` (includes flamegraphs)
 
@@ -255,12 +255,12 @@ jobs:
         </head>
         <body>
             <div class="container">
-                <h1>🚀 Bitemporal Timeseries v${{ steps.version.outputs.VERSION }} Performance Benchmarks</h1>
+                <h1>🚀 PyTemporal v${{ steps.version.outputs.VERSION }} Performance Benchmarks</h1>
                 
                 <div class="summary">
                     <h2>📊 Performance Summary</h2>
                     <p><strong>Release:</strong> ${{ steps.version.outputs.FULL_TAG }} | <strong>Generated:</strong> $(date -u '+%Y-%m-%d %H:%M UTC')</p>
-                    <p>This page contains comprehensive performance benchmarks for the bitemporal timeseries processing algorithm, including flamegraphs for detailed performance analysis.</p>
+                    <p>This page contains comprehensive performance benchmarks for the pytemporal bitemporal timeseries processing algorithm, including flamegraphs for detailed performance analysis.</p>
                     <ul>
                         <li><strong>Small Dataset (5 records)</strong>: ~30-35 µs</li>
                         <li><strong>Medium Dataset (100 records)</strong>: ~165-170 µs</li> 
@@ -385,7 +385,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/bitemporal-timeseries
+      url: https://pypi.org/p/pytemporal
     permissions:
       id-token: write
     if: startsWith(github.ref, 'refs/tags/v')  # only on version tags

@@ -10,7 +10,7 @@ from typing import List, Tuple, Optional, Literal
 from datetime import datetime, date
 
 # Import the Rust compute_changes function
-from .bitemporal_timeseries import compute_changes as _compute_changes
+from .pytemporal import compute_changes as _compute_changes
 
 # Infinity date representation - use a safe date that doesn't overflow pandas
 INFINITY_TIMESTAMP = pd.Timestamp('2260-12-31 23:59:59')

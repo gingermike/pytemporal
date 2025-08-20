@@ -1,5 +1,5 @@
 [package]
-name = "bitemporal-timeseries"
+name = "pytemporal"
 version = "0.1.0"
 edition = "2021"
 
@@ -17,7 +17,7 @@ criterion = { version = "0.5", features = ["html_reports", "cargo_bench_support"
 pprof = { version = "0.13", features = ["flamegraph", "criterion"] }
 
 [lib]
-name = "bitemporal_timeseries"
+name = "pytemporal"
 crate-type = ["cdylib", "rlib"]
 
 [profile.release]

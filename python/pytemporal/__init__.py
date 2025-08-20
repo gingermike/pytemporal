@@ -1,5 +1,5 @@
 # Import the Rust extension module (it's a submodule now)
-from .bitemporal_timeseries import compute_changes
+from .pytemporal import compute_changes
 
 # Import Python wrapper classes from the local processor module
 from .processor import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP

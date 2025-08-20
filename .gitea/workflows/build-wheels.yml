@@ -157,7 +157,7 @@ jobs:
         ## Installation
         \`\`\`bash
         # Install from Gitea package registry
-        pip install --index-url ${{ secrets.GITEA_PACKAGE_URL }}/simple/ bitemporal-timeseries==${{ steps.version.outputs.VERSION }}
+        pip install --index-url ${{ secrets.GITEA_PACKAGE_URL }}/simple/ pytemporal==${{ steps.version.outputs.VERSION }}
         \`\`\`
         
         ## Features

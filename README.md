@@ -1,4 +1,4 @@
-# Bitemporal Timeseries Library
+# PyTemporal Library
 
 A high-performance Rust library with Python bindings for processing bitemporal timeseries data. Optimized for financial services and applications requiring immutable audit trails with both business and system time dimensions.
 
@@ -19,7 +19,7 @@ Build from source (requires Rust):
 
 ```bash
 git clone <your-repository-url>
-cd bitemporal-timeseries
+cd pytemporal
 uv run maturin develop --release
 ```
 
@@ -27,7 +27,7 @@ uv run maturin develop --release
 
 ```python
 import pandas as pd
-from bitemporal_timeseries import compute_changes
+from pytemporal import compute_changes
 import pyarrow as pa
 from datetime import datetime
 
@@ -296,7 +296,7 @@ This project includes comprehensive performance monitoring with flamegraph analy
 ### 📊 Release Performance Reports
 
 View performance metrics and flamegraphs for each release at:
-**[Release Benchmarks](https://your-username.github.io/bitemporal-timeseries/)**
+**[Release Benchmarks](https://your-username.github.io/pytemporal/)**
 
 Each version tag automatically generates comprehensive performance documentation with flamegraphs, creating a historical record of performance evolution across releases.
 

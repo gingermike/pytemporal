@@ -334,21 +334,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "bitemporal-timeseries"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "blake3",
- "chrono",
- "criterion",
- "ordered-float",
- "pprof",
- "pyo3",
- "pyo3-arrow",
- "rayon",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1315,6 +1300,21 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "pytemporal"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "blake3",
+ "chrono",
+ "criterion",
+ "ordered-float",
+ "pprof",
+ "pyo3",
+ "pyo3-arrow",
+ "rayon",
 ]
 
 [[package]]

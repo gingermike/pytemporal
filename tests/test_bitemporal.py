@@ -7,7 +7,7 @@ import pandas as pd
 
 import pytest
 
-from bitemporal_timeseries import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
+from pytemporal import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
 from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
     append_head_exact, intersect, no_change
 from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \

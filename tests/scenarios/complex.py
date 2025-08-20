@@ -1,7 +1,7 @@
 from typing import Tuple, List
 from pandas import to_datetime as pdt
 
-from bitemporal_timeseries import INFINITY_TIMESTAMP
+from pytemporal import INFINITY_TIMESTAMP
 from tests.scenarios.defaults import pdt_now, pd_max, pdt_past, BitemporalScenario
 
 

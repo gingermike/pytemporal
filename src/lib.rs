@@ -270,7 +270,7 @@ fn compute_changes(
 }
 
 #[pymodule]
-fn bitemporal_timeseries(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn pytemporal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_changes, m)?)?;
     Ok(())
 }

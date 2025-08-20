@@ -2,16 +2,16 @@ from setuptools import setup
 from setuptools_rust import Binding, RustExtension
 
 setup(
-    name="bitemporal-timeseries",
+    name="pytemporal",
     version="0.1.0",
     rust_extensions=[
         RustExtension(
-            "bitemporal_timeseries",
+            "pytemporal",
             binding=Binding.PyO3,
             debug=False,
         )
     ],
-    packages=["bitemporal_timeseries"],
+    packages=["pytemporal"],
     install_requires=[
         "pyarrow>=14.0.0",
         "pandas>=2.0.0",
