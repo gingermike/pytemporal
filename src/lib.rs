@@ -14,7 +14,7 @@ mod batch_utils;
 pub use types::*;
 use timeline::process_id_timeline;
 use conflation::{deduplicate_record_batches, simple_conflate_batches};
-use batch_utils::{hash_values, extract_date_as_datetime, extract_timestamp};
+use batch_utils::{hash_values, extract_date_as_datetime, extract_timestamp, add_hash_column};
 
 pub fn process_updates(
     current_state: RecordBatch,
@@ -269,8 +269,25 @@ fn compute_changes(
     Ok((expire_indices, insert_batches))
 }
 
+#[pyfunction]
+fn add_hash_key(
+    record_batch: PyRecordBatch,
+    value_fields: Vec<String>,
+) -> PyResult<PyRecordBatch> {
+    // Convert PyRecordBatch to Arrow RecordBatch
+    let batch = record_batch.as_ref().clone();
+    
+    // Call the add_hash_column function
+    let batch_with_hash = add_hash_column(&batch, &value_fields)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+    
+    // Convert back to PyRecordBatch
+    Ok(PyRecordBatch::new(batch_with_hash))
+}
+
 #[pymodule]
 fn pytemporal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_changes, m)?)?;
+    m.add_function(wrap_pyfunction!(add_hash_key, m)?)?;
     Ok(())
 }

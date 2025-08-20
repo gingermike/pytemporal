@@ -1,6 +1,7 @@
 use crate::types::*;
 use arrow::array::{Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, Int64Array, StringBuilder};
 use arrow::array::{Int32Builder, Float64Builder, Date32Builder};
+use arrow::datatypes::{Schema, Field, DataType};
 use std::sync::Arc;
 use chrono::NaiveDateTime;
 use blake3;
@@ -310,4 +311,46 @@ pub fn hash_values_batch(
     }
     
     hashes
+}
+
+/// Add a hash column to a RecordBatch using the same hash function as the internal algorithm
+/// This ensures complete consistency with the bitemporal processing logic
+pub fn add_hash_column(
+    record_batch: &RecordBatch,
+    value_columns: &[String]
+) -> Result<RecordBatch, String> {
+    let num_rows = record_batch.num_rows();
+    if num_rows == 0 {
+        return Err("Cannot add hash column to empty RecordBatch".to_string());
+    }
+    
+    // Validate that all value columns exist
+    for col_name in value_columns {
+        if record_batch.schema().index_of(col_name).is_err() {
+            return Err(format!("Column '{}' not found in RecordBatch", col_name));
+        }
+    }
+    
+    // Use the existing hash_values_batch function to compute hashes for all rows
+    let row_indices: Vec<usize> = (0..num_rows).collect();
+    let hash_values_u64 = hash_values_batch(record_batch, &row_indices, value_columns);
+    
+    // Convert to i64 for Arrow compatibility (as used in the main algorithm)
+    let hash_values_i64: Vec<i64> = hash_values_u64.into_iter().map(|h| h as i64).collect();
+    
+    // Create the hash column
+    let hash_array = Arc::new(Int64Array::from(hash_values_i64));
+    
+    // Create new schema with added hash column
+    let mut new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
+    new_fields.push(Arc::new(Field::new("value_hash", DataType::Int64, false)));
+    let new_schema = Arc::new(Schema::new(new_fields));
+    
+    // Create new columns vector with all original columns plus hash column
+    let mut new_columns: Vec<ArrayRef> = record_batch.columns().to_vec();
+    new_columns.push(hash_array);
+    
+    // Create the new RecordBatch
+    RecordBatch::try_new(new_schema, new_columns)
+        .map_err(|e| format!("Failed to create RecordBatch with hash column: {}", e))
 }

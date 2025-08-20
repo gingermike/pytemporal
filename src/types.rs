@@ -1,4 +1,4 @@
-use arrow::array::{Array, ArrayRef, Date32Array, TimestampMicrosecondArray, RecordBatch, StringArray, Int32Array, Int64Array, Float64Array};
+use arrow::array::{Array, ArrayRef, Date32Array, TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray, TimestampMillisecondArray, RecordBatch, StringArray, Int32Array, Int64Array, Float64Array};
 use arrow::datatypes::DataType;
 use chrono::{NaiveDate, NaiveDateTime};
 use ordered_float;
@@ -56,9 +56,26 @@ impl ScalarValue {
                 let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
                 ScalarValue::Date32(arr.value(idx))
             }
-            DataType::Timestamp(_, _) => {
-                let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
-                ScalarValue::Int64(arr.value(idx))
+            DataType::Timestamp(unit, _) => {
+                use arrow::datatypes::TimeUnit;
+                match unit {
+                    TimeUnit::Second => {
+                        let arr = array.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
+                        ScalarValue::Int64(arr.value(idx))
+                    }
+                    TimeUnit::Millisecond => {
+                        let arr = array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap();
+                        ScalarValue::Int64(arr.value(idx))
+                    }
+                    TimeUnit::Microsecond => {
+                        let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                        ScalarValue::Int64(arr.value(idx))
+                    }
+                    TimeUnit::Nanosecond => {
+                        let arr = array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap();
+                        ScalarValue::Int64(arr.value(idx))
+                    }
+                }
             }
             _ => panic!("Unsupported data type: {:?}", array.data_type()),
         }

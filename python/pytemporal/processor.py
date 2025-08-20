@@ -9,8 +9,8 @@ import pandas as pd
 from typing import List, Tuple, Optional, Literal
 from datetime import datetime, date
 
-# Import the Rust compute_changes function
-from .pytemporal import compute_changes as _compute_changes
+# Import the Rust functions
+from .pytemporal import compute_changes as _compute_changes, add_hash_key as _add_hash_key
 
 # Infinity date representation - use a safe date that doesn't overflow pandas
 INFINITY_TIMESTAMP = pd.Timestamp('2260-12-31 23:59:59')
@@ -288,4 +288,60 @@ class BitemporalTimeseriesProcessor:
         required_cols = set(self.id_columns + self.value_columns + 
                            ['effective_from', 'effective_to', 'as_of_from', 'as_of_to'])
         return required_cols.issubset(set(df.columns))
+
+
+def add_hash_key(df: pd.DataFrame, value_fields: List[str]) -> pd.DataFrame:
+    """
+    Add a hash key column to a pandas DataFrame based on specified value fields.
+    
+    This function uses the same hash algorithm as the internal bitemporal processing
+    to ensure complete consistency. The hash is computed using BLAKE3 and provides
+    a fast way to detect changes in value columns.
+    
+    Args:
+        df: Input DataFrame
+        value_fields: List of column names to include in the hash calculation
+        
+    Returns:
+        DataFrame with an additional 'value_hash' column
+        
+    Raises:
+        ValueError: If any value_fields are not found in the DataFrame
+        RuntimeError: If the hash computation fails
+        
+    Example:
+        >>> import pandas as pd
+        >>> from pytemporal import add_hash_key
+        >>> df = pd.DataFrame({'id': [1, 2], 'price': [100, 200], 'volume': [10, 20]})
+        >>> result = add_hash_key(df, ['price', 'volume'])
+        >>> print(result.columns.tolist())
+        ['id', 'price', 'volume', 'value_hash']
+    """
+    if df.empty:
+        raise ValueError("Cannot add hash key to empty DataFrame")
+    
+    # Validate that all value fields exist
+    missing_cols = [col for col in value_fields if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Value fields not found in DataFrame: {missing_cols}")
+    
+    # Convert to Arrow RecordBatch
+    record_batch = pa.RecordBatch.from_pandas(df)
+    
+    # Call the Rust function
+    result_batch = _add_hash_key(record_batch, value_fields)
+    
+    # Convert back to pandas using the same method as the main processor
+    data = {}
+    col_names = result_batch.column_names
+    
+    for i in range(result_batch.num_columns):
+        col_name = col_names[i]
+        column = result_batch.column(i)
+        col_data = column.to_pylist()
+        data[col_name] = col_data
+    
+    result_df = pd.DataFrame(data)
+    
+    return result_df
 
