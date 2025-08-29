@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Benchmark
 use pprof::criterion::{Output, PProfProfiler};
 use pytemporal::*;
 use chrono::NaiveDate;
-use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array};
+use arrow::array::{TimestampMicrosecondArray, Int32Array, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ fn create_test_batch(
     let mut eff_to_builder = TimestampMicrosecondArray::builder(data.len());
     let mut as_of_from_builder = TimestampMicrosecondArray::builder(data.len());
     let mut as_of_to_builder = TimestampMicrosecondArray::builder(data.len());
-    let mut value_hash_builder = Int64Array::builder(data.len());
+    let mut value_hash_builder = StringBuilder::new();
 
     // Constants for date conversion
     const MAX_DATE: NaiveDate = match NaiveDate::from_ymd_opt(2262, 4, 11) {
@@ -69,7 +69,13 @@ fn create_test_batch(
         let as_of_to_microseconds = (as_of_to_date - epoch_datetime).num_microseconds().unwrap();
         as_of_to_builder.append_value(as_of_to_microseconds);
         
-        value_hash_builder.append_value(0); // Placeholder, will be computed
+        // Compute hash based on mv and price (value columns)
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(&mv.to_le_bytes());
+        hasher.update(&price.to_le_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+        value_hash_builder.append_value(&hash);
     }
 
     let schema = Arc::new(Schema::new(vec![
@@ -81,7 +87,7 @@ fn create_test_batch(
         Field::new("effective_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("as_of_from", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("as_of_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
-        Field::new("value_hash", DataType::Int64, false),
+        Field::new("value_hash", DataType::Utf8, false),
     ]));
 
     RecordBatch::try_new(
