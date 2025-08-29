@@ -155,7 +155,7 @@ class BitemporalTimeseriesProcessor:
         
         # Add value_hash column if it doesn't exist (it will be computed by Rust)
         if 'value_hash' not in df.columns:
-            df['value_hash'] = 0  # Placeholder, will be computed by Rust
+            df['value_hash'] = ""  # Placeholder, will be computed by Rust
         
         return df
     

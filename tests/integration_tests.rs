@@ -1,6 +1,6 @@
 use pytemporal::{process_updates, UpdateMode};
 use chrono::NaiveDate;
-use arrow::array::{TimestampMicrosecondArray, Int32Array, Int64Array, StringArray};
+use arrow::array::{TimestampMicrosecondArray, Int32Array, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ fn create_schema() -> Arc<Schema> {
         Field::new("effective_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("as_of_from", DataType::Timestamp(TimeUnit::Microsecond, None), false),
         Field::new("as_of_to", DataType::Timestamp(TimeUnit::Microsecond, None), false),
-        Field::new("value_hash", DataType::Int64, false),
+        Field::new("value_hash", DataType::Utf8, false),
     ]))
 }
 
@@ -66,7 +66,7 @@ fn create_batch(records: Vec<TestRecord>) -> RecordBatch {
     let mut eff_to_builder = TimestampMicrosecondArray::builder(len);
     let mut as_of_from_builder = TimestampMicrosecondArray::builder(len);
     let mut as_of_to_builder = TimestampMicrosecondArray::builder(len);
-    let mut value_hash_builder = Int64Array::builder(len);
+    let mut value_hash_builder = StringBuilder::new();
 
     let max_date = NaiveDate::from_ymd_opt(2262, 4, 11).unwrap();
     let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
@@ -93,7 +93,13 @@ fn create_batch(records: Vec<TestRecord>) -> RecordBatch {
         let as_of_to_micros = (as_of_to_date.and_hms_opt(23, 59, 59).unwrap() - epoch).num_microseconds().unwrap();
         as_of_to_builder.append_value(as_of_to_micros);
         
-        value_hash_builder.append_value(0);
+        // Compute hash based on mv and price (value columns)
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(&mv.to_le_bytes());
+        hasher.update(&price.to_le_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+        value_hash_builder.append_value(&hash);
     }
 
     RecordBatch::try_new(

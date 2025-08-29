@@ -8,7 +8,7 @@ arrow = "53.4"
 pyo3 = "0.21"
 pyo3-arrow = "0.3"
 chrono = "0.4"
-blake3 = "1.5"
+sha2 = "0.10"
 rayon = "1.8"
 ordered-float = "4.2"
 

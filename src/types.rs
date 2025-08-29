@@ -6,7 +6,7 @@ use ordered_float;
 #[derive(Debug, Clone)]
 pub struct BitemporalRecord {
     pub id_values: Vec<ScalarValue>,
-    pub value_hash: u64,
+    pub value_hash: String,
     pub effective_from: NaiveDateTime,
     pub effective_to: NaiveDateTime,
     pub as_of_from: NaiveDateTime,

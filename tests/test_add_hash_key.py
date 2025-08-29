@@ -35,11 +35,11 @@ class TestAddHashKeyBasicFunctionality:
         # Check that data is preserved
         pd.testing.assert_frame_equal(result.drop('value_hash', axis=1), df)
         
-        # Check that hash values are int64 (as used internally)
-        assert result['value_hash'].dtype == np.int64
+        # Check that hash values are strings (SHA256 hex digests)
+        assert result['value_hash'].dtype == object  # strings are stored as object type
         
-        # Check that hash values are non-zero and different for different input
-        assert result['value_hash'].iloc[0] != 0
+        # Check that hash values are non-empty and different for different input
+        assert result['value_hash'].iloc[0] != ""
         assert result['value_hash'].iloc[0] != result['value_hash'].iloc[1]
     
     def test_single_value_field(self):
@@ -103,7 +103,7 @@ class TestAddHashKeyDataTypes:
         
         # Check that string hashing works
         assert 'value_hash' in result.columns
-        assert result['value_hash'].dtype == np.int64
+        assert result['value_hash'].dtype == object  # strings are stored as object type
         
         # Different strings should produce different hashes
         assert result['value_hash'].iloc[0] != result['value_hash'].iloc[1]
@@ -160,7 +160,7 @@ class TestAddHashKeyDataTypes:
         
         # Check that Boolean hashing works
         assert 'value_hash' in result.columns
-        assert result['value_hash'].dtype == np.int64
+        assert result['value_hash'].dtype == object  # strings are stored as object type
         
         # Different Boolean combinations should produce different hashes
         hash_values = result['value_hash'].tolist()
@@ -389,7 +389,7 @@ class TestAddHashKeyEdgeCases:
         
         assert len(result) == 1
         assert 'value_hash' in result.columns
-        assert result['value_hash'].iloc[0] != 0
+        assert result['value_hash'].iloc[0] != ""
     
     def test_duplicate_rows(self):
         """Test with completely duplicate rows."""
@@ -450,7 +450,7 @@ class TestAddHashKeyEdgeCases:
         df4 = pd.DataFrame({'active': [True]})
         result4 = add_hash_key(df4, ['active'])
         assert len(result4) == 1
-        assert result4['value_hash'].iloc[0] != 0
+        assert result4['value_hash'].iloc[0] != ""
     
     def test_field_order_consistency(self):
         """Test that field order in value_fields matters."""

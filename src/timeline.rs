@@ -222,7 +222,7 @@ pub fn emit_segment(
     
     let segment_record = BitemporalRecord {
         id_values: record_to_emit.id_values.clone(),
-        value_hash: record_to_emit.value_hash,
+        value_hash: record_to_emit.value_hash.clone(),
         effective_from: from_date,
         effective_to: to_date,
         as_of_from,

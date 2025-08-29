@@ -1,10 +1,9 @@
 use crate::types::*;
-use arrow::array::{Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, Int64Array, StringBuilder};
+use arrow::array::{Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, StringBuilder, StringArray};
 use arrow::array::{Int32Builder, Float64Builder, Date32Builder};
 use arrow::datatypes::{Schema, Field, DataType};
 use std::sync::Arc;
 use chrono::NaiveDateTime;
-use blake3;
 
 // Cache the epoch calculation since it's used frequently
 const EPOCH: NaiveDateTime = match chrono::DateTime::from_timestamp(0, 0) {
@@ -22,7 +21,9 @@ pub fn extract_date_as_datetime(array: &TimestampMicrosecondArray, idx: usize) -
     extract_timestamp(array, idx)
 }
 
-pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[String]) -> u64 {
+pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[String]) -> String {
+    use sha2::{Sha256, Digest};
+    
     let mut hasher_input = Vec::new();
     
     for col_name in value_columns {
@@ -40,9 +41,9 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
         }
     }
     
-    let hash = blake3::hash(&hasher_input);
-    let hash_bytes = hash.as_bytes();
-    u64::from_be_bytes(hash_bytes[..8].try_into().unwrap())
+    let mut hasher = Sha256::new();
+    hasher.update(&hasher_input);
+    format!("{:x}", hasher.finalize())
 }
 
 // Helper function to create a timestamp array from a NaiveDateTime
@@ -54,9 +55,9 @@ fn create_timestamp_array(datetime: NaiveDateTime) -> ArrayRef {
 }
 
 // Helper function to create a value hash array
-fn create_value_hash_array(hash: u64) -> ArrayRef {
-    let mut builder = Int64Array::builder(1);
-    builder.append_value(hash as i64);
+fn create_value_hash_array(hash: &str) -> ArrayRef {
+    let mut builder = StringBuilder::new();
+    builder.append_value(hash);
     Arc::new(builder.finish())
 }
 
@@ -86,7 +87,7 @@ fn build_temporal_columns(
                 columns.push(create_timestamp_array(record.as_of_to));
             }
             "value_hash" => {
-                columns.push(create_value_hash_array(record.value_hash));
+                columns.push(create_value_hash_array(&record.value_hash));
             }
             _ => {
                 // Copy from source batch
@@ -180,9 +181,9 @@ pub fn create_record_batch_from_records(
                 columns.push(Arc::new(builder.finish()));
             }
             "value_hash" => {
-                let mut builder = Int64Array::builder(num_records);
+                let mut builder = StringBuilder::new();
                 for record in records {
-                    builder.append_value(record.value_hash as i64);
+                    builder.append_value(&record.value_hash);
                 }
                 columns.push(Arc::new(builder.finish()));
             }
@@ -283,7 +284,9 @@ pub fn hash_values_batch(
     record_batch: &RecordBatch, 
     row_indices: &[usize], 
     value_columns: &[String]
-) -> Vec<u64> {
+) -> Vec<String> {
+    use sha2::{Sha256, Digest};
+    
     let mut hashes = Vec::with_capacity(row_indices.len());
     
     // Pre-compute column indices to avoid repeated lookups
@@ -307,9 +310,9 @@ pub fn hash_values_batch(
             }
         }
         
-        let hash = blake3::hash(&hasher_input);
-        let hash_bytes = hash.as_bytes();
-        hashes.push(u64::from_be_bytes(hash_bytes[..8].try_into().unwrap()));
+        let mut hasher = Sha256::new();
+        hasher.update(&hasher_input);
+        hashes.push(format!("{:x}", hasher.finalize()));
     }
     
     hashes
@@ -335,17 +338,14 @@ pub fn add_hash_column(
     
     // Use the existing hash_values_batch function to compute hashes for all rows
     let row_indices: Vec<usize> = (0..num_rows).collect();
-    let hash_values_u64 = hash_values_batch(record_batch, &row_indices, value_columns);
-    
-    // Convert to i64 for Arrow compatibility (as used in the main algorithm)
-    let hash_values_i64: Vec<i64> = hash_values_u64.into_iter().map(|h| h as i64).collect();
+    let hash_values_string = hash_values_batch(record_batch, &row_indices, value_columns);
     
     // Create the hash column
-    let hash_array = Arc::new(Int64Array::from(hash_values_i64));
+    let hash_array = Arc::new(StringArray::from(hash_values_string));
     
     // Create new schema with added hash column
     let mut new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
-    new_fields.push(Arc::new(Field::new("value_hash", DataType::Int64, false)));
+    new_fields.push(Arc::new(Field::new("value_hash", DataType::Utf8, false)));
     let new_schema = Arc::new(Schema::new(new_fields));
     
     // Create new columns vector with all original columns plus hash column

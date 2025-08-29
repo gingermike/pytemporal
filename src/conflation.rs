@@ -1,6 +1,6 @@
 use crate::types::*;
 use crate::batch_utils::extract_date_as_datetime;
-use arrow::array::{RecordBatch, TimestampMicrosecondArray, Int64Array, ArrayRef};
+use arrow::array::{RecordBatch, TimestampMicrosecondArray, StringArray, ArrayRef};
 use std::sync::Arc;
 use chrono::NaiveDateTime;
 
@@ -29,8 +29,8 @@ pub fn can_conflate_with_last_batch(last_batch: &RecordBatch, new_record: &Bitem
 
     // Check if value hashes match
     let hash_array = last_batch.column_by_name("value_hash").unwrap()
-        .as_any().downcast_ref::<Int64Array>().unwrap();
-    let last_hash = hash_array.value(0) as u64;
+        .as_any().downcast_ref::<StringArray>().unwrap();
+    let last_hash = hash_array.value(0);
     
     if last_hash != new_record.value_hash {
         return Ok(false);
@@ -183,7 +183,7 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
     }
     
     // Convert RecordBatches to a more workable format for deduplication
-    let mut records: Vec<(NaiveDateTime, NaiveDateTime, u64, RecordBatch)> = Vec::new();
+    let mut records: Vec<(NaiveDateTime, NaiveDateTime, String, RecordBatch)> = Vec::new();
     
     for batch in batches {
         if batch.num_rows() == 1 {
@@ -192,11 +192,11 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
             let eff_to_array = batch.column_by_name("effective_to").unwrap()
                 .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
             let hash_array = batch.column_by_name("value_hash").unwrap()
-                .as_any().downcast_ref::<Int64Array>().unwrap();
+                .as_any().downcast_ref::<StringArray>().unwrap();
             
             let eff_from = extract_date_as_datetime(eff_from_array, 0);
             let eff_to = extract_date_as_datetime(eff_to_array, 0);
-            let hash = hash_array.value(0) as u64;
+            let hash = hash_array.value(0).to_string();
             
             records.push((eff_from, eff_to, hash, batch));
         }
@@ -217,11 +217,11 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
     
     // Remove exact duplicates
     let mut deduped: Vec<RecordBatch> = Vec::new();
-    let mut last_key: Option<(NaiveDateTime, NaiveDateTime, u64)> = None;
+    let mut last_key: Option<(NaiveDateTime, NaiveDateTime, String)> = None;
     
     for (eff_from, eff_to, hash, batch) in records {
         let current_key = (eff_from, eff_to, hash);
-        if last_key != Some(current_key) {
+        if last_key != Some(current_key.clone()) {
             deduped.push(batch);
             last_key = Some(current_key);
         }
