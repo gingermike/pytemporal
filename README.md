@@ -191,8 +191,43 @@ This significantly reduces database row count while preserving temporal accuracy
 
 ### Update Modes
 
-1. **Delta Mode** (default): Only provided records are updates, existing state is preserved where not overlapped
-2. **Full State Mode**: Provided records represent complete new state, all current records for matching IDs are expired
+The algorithm supports two distinct update modes that determine how updates interact with existing current state:
+
+#### 1. Delta Mode (default)
+- **Behavior**: Only provided records are treated as updates
+- **Existing State**: Preserved where not temporally overlapped by updates
+- **Use Case**: Incremental updates where you only want to modify specific time periods
+- **Processing**: Uses timeline-based algorithm to handle temporal overlaps
+
+#### 2. Full State Mode
+- **Behavior**: Provided records represent the complete desired state for each ID group
+- **Existing State**: Only preserved if identical records exist in the updates (same values and temporal ranges)
+- **Value Comparison**: Records are compared using SHA256 hashes of value columns
+- **Processing Rules**:
+  - **Unchanged Records**: If an update has identical values and temporal range as current state, neither expire nor insert
+  - **Changed Records**: If values differ, expire old record and insert new record
+  - **New Records**: Insert records that don't exist in current state
+  - **Removed Records**: Expire current records not present in updates
+
+#### Full State Mode Example
+
+**Current State:**
+```
+ID=1, mv=100, price=250, effective=[2020-01-01, 2020-02-01]
+ID=2, mv=300, price=400, effective=[2020-01-01, 2020-02-01]  
+```
+
+**Updates (Full State):**
+```
+ID=1, mv=150, price=250, effective=[2020-01-01, 2020-02-01]  # Values changed
+ID=2, mv=300, price=400, effective=[2020-01-01, 2020-02-01]  # Values identical  
+ID=3, mv=500, price=600, effective=[2020-01-01, 2020-02-01]  # New record
+```
+
+**Result:**
+- **Expire**: ID=1 (values changed: mv 100→150)
+- **Insert**: ID=1 (new values), ID=3 (new record)  
+- **No Action**: ID=2 (identical values, no change needed)
 
 ### Parallelization Strategy
 
@@ -271,7 +306,7 @@ uv run maturin develop
 - **arrow** (53.4) - Columnar data processing
 - **pyo3** (0.21) - Python bindings  
 - **chrono** (0.4) - Date/time handling
-- **blake3** (1.5) - Cryptographic hashing
+- **sha2** (0.10) - SHA256 hashing for client-compatible hex digests
 - **rayon** (1.8) - Parallel processing
 - **criterion** (0.5) - Benchmarking framework
 
@@ -280,7 +315,7 @@ uv run maturin develop
 ### Rust Core
 - Zero-copy Arrow array processing
 - Parallel execution with Rayon
-- Hash-based change detection with BLAKE3
+- Hash-based change detection with SHA256 (client-compatible hex digests)
 - Post-processing conflation for optimal storage
 - Modular design with clear separation of concerns
 
@@ -330,7 +365,7 @@ python3 -m http.server 8000 --directory target/criterion
 - **`process_id_timeline`**: Core algorithm logic
 - **Rayon parallelization**: Thread management overhead
 - **Arrow operations**: Columnar data processing
-- **BLAKE3 hashing**: Value fingerprinting for conflation
+- **SHA256 hashing**: Value fingerprinting for conflation
 
 See `docs/benchmark-publishing.md` for complete setup details.
 

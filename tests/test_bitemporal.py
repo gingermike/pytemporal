@@ -1,6 +1,5 @@
 from datetime import datetime
-from typing import List, Tuple
-
+from typing import List, Tuple, Literal
 
 from pandas._testing import assert_frame_equal
 import pandas as pd
@@ -9,7 +8,7 @@ import pytest
 
 from pytemporal import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
 from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
-    append_head_exact, intersect, no_change
+    append_head_exact, intersect, no_change, full_state_basic
 from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \
     multi_intersection_multiple_point, multi_field, extend_current_row, extend_update, no_change_with_intersection
 from tests.scenarios.defaults import default_id_columns, default_value_columns, default_columns
@@ -25,6 +24,7 @@ scenarios = [
     append_head_exact,
     intersect,
     no_change,
+    full_state_basic,
 
     #complex
     overlay_two,
@@ -39,11 +39,14 @@ scenarios = [
 
 
 @pytest.mark.parametrize(
-    ("current_state", "updates", "expected"),
-    [scenario.data() for scenario in scenarios],
+    ("current_state", "updates", "expected", "update_mode"),
+    [scenario.data() + tuple([scenario.update_mode]) for scenario in scenarios],
     ids=[scenario.id for scenario in scenarios]
 )
-def test_update_scenarios(current_state: List, updates: List, expected: Tuple[List, List]):
+def test_update_scenarios(current_state: List,
+                          updates: List,
+                          expected: Tuple[List, List],
+                          update_mode: Literal["delta", "full_state"]):
 
     # Assemble
     processor = BitemporalTimeseriesProcessor(
@@ -58,7 +61,7 @@ def test_update_scenarios(current_state: List, updates: List, expected: Tuple[Li
     expire, insert = processor.compute_changes(
         pd.DataFrame(current_state_df, columns=default_columns),
         pd.DataFrame(updates_df, columns=default_columns),
-        update_mode="delta"
+        update_mode=update_mode
     )
     expire = expire.sort_values(by=default_id_columns + ["effective_from"]).reset_index(drop=True)
     insert = insert.sort_values(by=default_id_columns + ["effective_from"]).reset_index(drop=True)

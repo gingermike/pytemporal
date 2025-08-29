@@ -52,7 +52,7 @@ class BitemporalTimeseriesProcessor:
             current_state: DataFrame with current database state
             updates: DataFrame with incoming updates
             system_date: Optional system date (YYYY-MM-DD format)
-            update_mode: "delta" for incremental updates, "full_state" for complete state
+            update_mode: "delta" for incremental updates, "full_state" for complete state replacement (only expires/inserts when values change)
             
         Returns:
             Tuple of (rows_to_expire, rows_to_insert)

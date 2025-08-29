@@ -203,12 +203,36 @@ def _no_change() -> Tuple[List, List, Tuple]:
     )
 
 
-insert = BitemporalScenario("insert", _insert)
-overwrite = BitemporalScenario("overwrite", _overwrite)
-unrelated_state = BitemporalScenario("unrelated_state", _unrelated_state)
-append_tail = BitemporalScenario("append_tail", _append_tail)
-append_tail_exact = BitemporalScenario("append_tail_exact", _append_tail_exact)
-append_head = BitemporalScenario("append_head", _append_head)
-append_head_exact = BitemporalScenario("append_head_exact", _append_head_exact)
-intersect = BitemporalScenario("intersect", _intersect)
-no_change = BitemporalScenario("no_change", _no_change)
+def _full_state_basic() -> Tuple[List, List, Tuple]:
+    return (
+        [
+            [1, "test", 100.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_past, pd_max],
+            [2, "test2", 300.0, 400.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_past, pd_max],
+        ],
+        [
+            [1, "test", 150.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+            [2, "test2", 300.0, 400.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+            [3, "test3", 500.0, 600.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+        ],
+        (
+            [
+                [1, "test", 100.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_past, pd_max]
+            ],
+            [
+                [1, "test", 150.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+                [3, "test3", 500.0, 600.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+            ]
+        )
+    )
+
+
+insert = BitemporalScenario("insert", _insert, "delta")
+overwrite = BitemporalScenario("overwrite", _overwrite, "delta")
+unrelated_state = BitemporalScenario("unrelated_state", _unrelated_state, "delta")
+append_tail = BitemporalScenario("append_tail", _append_tail, "delta")
+append_tail_exact = BitemporalScenario("append_tail_exact", _append_tail_exact, "delta")
+append_head = BitemporalScenario("append_head", _append_head, "delta")
+append_head_exact = BitemporalScenario("append_head_exact", _append_head_exact, "delta")
+intersect = BitemporalScenario("intersect", _intersect, "delta")
+no_change = BitemporalScenario("no_change", _no_change, "delta")
+full_state_basic = BitemporalScenario("full_state_basic", _full_state_basic, "full_state")

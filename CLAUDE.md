@@ -38,7 +38,9 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **Output**: ChangeSet with `to_expire` and `to_insert` batches
 - **Processing**: Groups by ID columns, processes each group independently
 - **Conflation**: Post-processes results to merge adjacent same-value segments
-- **Update Modes**: Delta (default) - updates modify existing effective periods
+- **Update Modes**: 
+  - **Delta (default)**: Updates modify existing effective periods using timeline-based processing
+  - **Full State**: Updates represent complete desired state; only expire/insert when values actually change (SHA256 hash comparison)
 - **Temporal Precision**: Effective dates use Date32, as_of timestamps use TimestampMicrosecond for second-level precision
 
 ## Dependencies & Purpose
@@ -46,7 +48,7 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - `pyo3` (0.21) - Python bindings with extension-module feature
 - `pyo3-arrow` (0.3) - Arrow integration for Python
 - `chrono` (0.4) - Date/time handling
-- `blake3` (1.5) - Fast hashing for value fingerprints
+- `sha2` (0.10) - SHA256 hashing for value fingerprints (client-compatible hex digests)
 - `rayon` (1.8) - Data parallelism
 - `ordered-float` (4.2) - Hash-able floating point values
 - `criterion` (0.5) - Professional benchmarking framework
@@ -92,6 +94,8 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-07-27**: Added complete Gitea Actions workflow for Linux wheel building and publishing
 - **2025-08-04**: Fixed non-overlapping update issue where current state records were incorrectly re-emitted when updates had same ID but no temporal overlap. Enhanced `process_id_timeline` to separate overlapping vs non-overlapping updates and process them appropriately.
 - **2025-08-04**: Fixed `as_of_from` timestamp inheritance issue where re-emitted current state segments retained old timestamps instead of inheriting the update's `as_of_from` timestamp. Modified `emit_segment` to pass and use update timestamps for current state records affected by overlapping updates.
+- **2025-08-29**: Changed hash implementation from Blake3 numeric values to SHA256 hex digest strings for client compatibility. Updated all schemas, tests, and benchmarks to use string-based hashes. Hash values now match Python's `hashlib.sha256().hexdigest()` format.
+- **2025-08-29**: Fixed full_state mode logic that was incorrectly expiring ALL current records regardless of value changes. Updated implementation to only expire/insert records when values actually change, using SHA256 hash comparison for efficiency. This prevents unnecessary database operations for unchanged records in full_state mode.
 
 ## Development Best Practices
 - Ensure to keep README.md up to date with changes to the code base or approach

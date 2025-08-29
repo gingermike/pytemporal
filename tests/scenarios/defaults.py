@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, List, Callable
+from typing import Tuple, List, Callable, Literal
 
 import pandas as pd
 
@@ -19,3 +19,4 @@ class BitemporalScenario:
 
     id: str
     data: Callable[[], Tuple[List, List, Tuple]]
+    update_mode: Literal["delta", "full_state"]

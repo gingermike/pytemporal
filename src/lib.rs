@@ -187,22 +187,62 @@ fn process_id_group(
     }
     
     if update_mode == UpdateMode::FullState {
-        // In full state mode, expire all current records and insert update records as-is
-        for record in &current_records {
-            if let Some(orig_idx) = record.original_index {
-                expire_indices.push(orig_idx);
+        // In full state mode, only expire/insert records if values have actually changed
+        // Compare current records with update records to see if values changed
+        for current_record in &current_records {
+            // Find corresponding update record with same temporal range
+            let matching_update = update_records.iter().find(|update_record| {
+                current_record.effective_from == update_record.effective_from &&
+                current_record.effective_to == update_record.effective_to
+            });
+            
+            if let Some(update_record) = matching_update {
+                // Found matching temporal range, check if values changed
+                if current_record.value_hash != update_record.value_hash {
+                    // Values changed, expire current and we'll insert the update later
+                    if let Some(orig_idx) = current_record.original_index {
+                        expire_indices.push(orig_idx);
+                    }
+                }
+                // If values didn't change, do nothing (no expire, no insert)
+            } else {
+                // No matching update record, expire this current record
+                if let Some(orig_idx) = current_record.original_index {
+                    expire_indices.push(orig_idx);
+                }
             }
         }
         
-        // Insert all update records as a batch
-        if !update_records.is_empty() {
-            let records: Vec<BitemporalRecord> = update_records.iter().cloned().collect();
-            let source_rows: Vec<usize> = update_records.iter().map(|r| r.original_index.unwrap()).collect();
+        // Insert only update records that either:
+        // 1. Have no matching current record (new records), or  
+        // 2. Have different values from their matching current record
+        let mut records_to_insert = Vec::new();
+        let mut source_rows_to_insert = Vec::new();
+        
+        for update_record in update_records {
+            let matching_current = current_records.iter().find(|current_record| {
+                current_record.effective_from == update_record.effective_from &&
+                current_record.effective_to == update_record.effective_to
+            });
             
+            if let Some(current_record) = matching_current {
+                // Found matching temporal range, only insert if values changed
+                if current_record.value_hash != update_record.value_hash {
+                    records_to_insert.push(update_record.clone());
+                    source_rows_to_insert.push(update_record.original_index.unwrap());
+                }
+            } else {
+                // No matching current record, insert this new record
+                records_to_insert.push(update_record.clone());
+                source_rows_to_insert.push(update_record.original_index.unwrap());
+            }
+        }
+        
+        if !records_to_insert.is_empty() {
             let batch = crate::batch_utils::create_record_batch_from_records(
-                &records,
+                &records_to_insert,
                 updates,
-                &source_rows,
+                &source_rows_to_insert,
             )?;
             insert_batches.push(batch);
         }
