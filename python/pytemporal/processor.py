@@ -86,6 +86,7 @@ class BitemporalTimeseriesProcessor:
         if expired_batch:
             expired_dfs = []
             for batch in expired_batch:
+                # arro3 doesn't have to_pandas(), use manual conversion
                 data = {}
                 col_names = batch.column_names
                 
@@ -131,19 +132,14 @@ class BitemporalTimeseriesProcessor:
         if insert_batch:
             insert_dfs = []
             for batch in insert_batch:
-                # Convert arro3 RecordBatch to pandas DataFrame
-                # Now that we have arro3-core installed, we can access its methods
+                # arro3 doesn't have to_pandas(), use manual conversion
                 data = {}
                 col_names = batch.column_names
                 
                 for i in range(batch.num_columns):
                     col_name = col_names[i]
                     column = batch.column(i)
-                    
-                    # Convert column to Python list
-                    # arro3 columns have to_pylist method
                     col_data = column.to_pylist()
-                    
                     data[col_name] = col_data
                 
                 insert_dfs.append(pd.DataFrame(data))

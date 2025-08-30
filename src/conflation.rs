@@ -229,3 +229,52 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
     
     Ok(deduped)
 }
+
+/// Consolidate multiple RecordBatches into fewer large batches to reduce Python conversion overhead
+/// This combines smaller batches from different ID groups into larger consolidated batches
+pub fn consolidate_final_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, String> {
+    if batches.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    // If we only have one batch, or all batches are already large, return as-is
+    if batches.len() == 1 || batches.iter().all(|b| b.num_rows() > 1000) {
+        return Ok(batches);
+    }
+    
+    // We want to group batches by schema to ensure compatibility
+    let first_schema = batches[0].schema();
+    
+    // Check if all batches have the same schema - if not, return original (safer)
+    for batch in &batches {
+        if batch.schema() != first_schema {
+            return Ok(batches); // Mixed schemas, return original to be safe
+        }
+    }
+    
+    // All batches have the same schema, so we can consolidate them
+    // Convert all batches into a single large table, then split into reasonable chunks
+    let table = arrow::compute::concat_batches(&first_schema, &batches)
+        .map_err(|e| format!("Failed to consolidate batches: {}", e))?;
+    
+    // Split the consolidated data into reasonably-sized batches (target ~10k rows per batch)
+    let mut result_batches = Vec::new();
+    let target_batch_size = 10000;
+    let total_rows = table.num_rows();
+    
+    if total_rows <= target_batch_size {
+        // Small enough to be a single batch
+        result_batches.push(table);
+    } else {
+        // Split into multiple batches of target size
+        let mut offset = 0;
+        while offset < total_rows {
+            let length = std::cmp::min(target_batch_size, total_rows - offset);
+            let slice = table.slice(offset, length);
+            result_batches.push(slice);
+            offset += length;
+        }
+    }
+    
+    Ok(result_batches)
+}

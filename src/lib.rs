@@ -13,7 +13,7 @@ mod batch_utils;
 
 pub use types::*;
 use timeline::process_id_timeline;
-use conflation::{deduplicate_record_batches, simple_conflate_batches};
+use conflation::{deduplicate_record_batches, simple_conflate_batches, consolidate_final_batches};
 use batch_utils::{hash_values, extract_date_as_datetime, extract_timestamp, add_hash_column};
 
 pub fn process_updates(
@@ -156,6 +156,9 @@ pub fn process_updates(
     
     // Simple post-processing conflation for adjacent segments
     to_insert = simple_conflate_batches(to_insert)?;
+    
+    // Final consolidation - combine all batches into fewer large batches
+    to_insert = consolidate_final_batches(to_insert)?;
     
     // Create expired record batches with updated as_of_to timestamp
     let expired_records = if !to_expire.is_empty() {
