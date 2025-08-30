@@ -28,6 +28,7 @@ pub enum ScalarValue {
     Float64(ordered_float::OrderedFloat<f64>),
     Date32(i32),
     Boolean(bool),
+    Null,
 }
 
 impl ScalarValue {
@@ -81,6 +82,10 @@ impl ScalarValue {
             DataType::Boolean => {
                 let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
                 ScalarValue::Boolean(arr.value(idx))
+            }
+            DataType::Null => {
+                // Entire column is NULL type (all values are NULL)
+                ScalarValue::Null
             }
             _ => panic!("Unsupported data type: {:?}", array.data_type()),
         }

@@ -473,7 +473,7 @@ fn create_tombstone_batch(
     tombstone_records: &[BitemporalRecord], 
     updates: &RecordBatch
 ) -> Result<RecordBatch, String> {
-    use arrow::array::{StringBuilder, Float64Builder, Int32Builder, TimestampMicrosecondArray};
+    use arrow::array::{StringBuilder, Float64Builder, Int32Builder, BooleanBuilder, TimestampMicrosecondArray};
     use std::sync::Arc;
     
     if tombstone_records.is_empty() {
@@ -592,6 +592,23 @@ fn create_tombstone_batch(
                             }
                         }
                         columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Boolean => {
+                        let mut builder = BooleanBuilder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Boolean(b)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*b);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Null => {
+                        // Create a null array with the right length
+                        use arrow::array::NullArray;
+                        let null_array = NullArray::new(tombstone_records.len());
+                        columns.push(Arc::new(null_array));
                     }
                     _ => {
                         return Err(format!("Unsupported data type for tombstone records: {:?}", field.data_type()));

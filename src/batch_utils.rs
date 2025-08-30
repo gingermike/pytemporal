@@ -38,6 +38,7 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
             ScalarValue::Float64(f) => hasher_input.extend_from_slice(&f.0.to_le_bytes()),
             ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
             ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
+            ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
         }
     }
     
@@ -307,6 +308,7 @@ pub fn hash_values_batch(
                 ScalarValue::Float64(f) => hasher_input.extend_from_slice(&f.0.to_le_bytes()),
                 ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
                 ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
+                ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
             }
         }
         
@@ -416,18 +418,61 @@ pub fn create_expired_records_batch(
                     }
                     columns.push(Arc::new(builder.finish()));
                 }
-                arrow::datatypes::DataType::Timestamp(_, _) => {
-                    let timestamp_array = orig_array.as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>().unwrap();
-                    let mut builder = TimestampMicrosecondArray::builder(num_records);
-                    for &idx in expire_indices {
-                        if timestamp_array.is_null(idx) {
-                            builder.append_null();
-                        } else {
-                            builder.append_value(timestamp_array.value(idx));
+                arrow::datatypes::DataType::Timestamp(time_unit, _) => {
+                    match time_unit {
+                        arrow::datatypes::TimeUnit::Microsecond => {
+                            let timestamp_array = orig_array.as_any()
+                                .downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                            let mut builder = TimestampMicrosecondArray::builder(num_records);
+                            for &idx in expire_indices {
+                                if timestamp_array.is_null(idx) {
+                                    builder.append_null();
+                                } else {
+                                    builder.append_value(timestamp_array.value(idx));
+                                }
+                            }
+                            columns.push(Arc::new(builder.finish()));
+                        }
+                        arrow::datatypes::TimeUnit::Nanosecond => {
+                            let timestamp_array = orig_array.as_any()
+                                .downcast_ref::<arrow::array::TimestampNanosecondArray>().unwrap();
+                            let mut builder = arrow::array::TimestampNanosecondArray::builder(num_records);
+                            for &idx in expire_indices {
+                                if timestamp_array.is_null(idx) {
+                                    builder.append_null();
+                                } else {
+                                    builder.append_value(timestamp_array.value(idx));
+                                }
+                            }
+                            columns.push(Arc::new(builder.finish()));
+                        }
+                        arrow::datatypes::TimeUnit::Millisecond => {
+                            let timestamp_array = orig_array.as_any()
+                                .downcast_ref::<arrow::array::TimestampMillisecondArray>().unwrap();
+                            let mut builder = arrow::array::TimestampMillisecondArray::builder(num_records);
+                            for &idx in expire_indices {
+                                if timestamp_array.is_null(idx) {
+                                    builder.append_null();
+                                } else {
+                                    builder.append_value(timestamp_array.value(idx));
+                                }
+                            }
+                            columns.push(Arc::new(builder.finish()));
+                        }
+                        arrow::datatypes::TimeUnit::Second => {
+                            let timestamp_array = orig_array.as_any()
+                                .downcast_ref::<arrow::array::TimestampSecondArray>().unwrap();
+                            let mut builder = arrow::array::TimestampSecondArray::builder(num_records);
+                            for &idx in expire_indices {
+                                if timestamp_array.is_null(idx) {
+                                    builder.append_null();
+                                } else {
+                                    builder.append_value(timestamp_array.value(idx));
+                                }
+                            }
+                            columns.push(Arc::new(builder.finish()));
                         }
                     }
-                    columns.push(Arc::new(builder.finish()));
                 }
                 _ => {
                     // Fallback to slice method for unsupported types
