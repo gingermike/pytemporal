@@ -24,6 +24,9 @@ pub fn process_updates(
     system_date: NaiveDate,
     update_mode: UpdateMode,
 ) -> Result<ChangeSet, String> {
+    // Generate a consistent as_of_from timestamp for tombstone records
+    let batch_timestamp = chrono::Utc::now().naive_utc();
+    
     let mut to_expire = Vec::new();
     let mut to_insert = Vec::new();
     
@@ -81,7 +84,7 @@ pub fn process_updates(
             value_hash: hash_values(&updates, upd_idx, &value_columns),
             effective_from: extract_date_as_datetime(upd_eff_from_array, upd_idx),
             effective_to: extract_date_as_datetime(upd_eff_to_array, upd_idx),
-            as_of_from: extract_timestamp(upd_as_of_from_array, upd_idx),
+            as_of_from: extract_timestamp(upd_as_of_from_array, upd_idx),  // Preserve original input timestamp
             as_of_to: MAX_TIMESTAMP,
             original_index: Some(upd_idx), // Store update index for reference
         };
@@ -113,6 +116,7 @@ pub fn process_updates(
                     &value_columns,
                     system_date,
                     update_mode,
+                    batch_timestamp,
                 )
             })
             .collect();
@@ -135,6 +139,7 @@ pub fn process_updates(
                 &value_columns,
                 system_date,
                 update_mode,
+                batch_timestamp,
             )?;
             
             to_expire.extend(expire_indices);
@@ -152,7 +157,14 @@ pub fn process_updates(
     // Simple post-processing conflation for adjacent segments
     to_insert = simple_conflate_batches(to_insert)?;
     
-    Ok(ChangeSet { to_expire, to_insert })
+    // Create expired record batches with updated as_of_to timestamp
+    let expired_records = if !to_expire.is_empty() {
+        vec![crate::batch_utils::create_expired_records_batch(&current_state, &to_expire, batch_timestamp)?]
+    } else {
+        Vec::new()
+    };
+
+    Ok(ChangeSet { to_expire, to_insert, expired_records })
 }
 
 // Extract ID group processing logic for reuse in parallel and serial paths
@@ -165,6 +177,7 @@ fn process_id_group(
     value_columns: &[String],
     system_date: NaiveDate,
     update_mode: UpdateMode,
+    batch_timestamp: chrono::NaiveDateTime,
 ) -> Result<(Vec<usize>, Vec<RecordBatch>), String> {
     // Sort records by effective_from for chronological processing
     current_records.sort_by_key(|r| r.effective_from);
@@ -177,10 +190,60 @@ fn process_id_group(
         // No updates for this ID
         if update_mode == UpdateMode::FullState {
             // In full state mode, expire all current records for IDs not in updates
+            // and create tombstone records
+            let mut tombstone_records = Vec::new();
+            
             for record in current_records {
                 if let Some(orig_idx) = record.original_index {
                     expire_indices.push(orig_idx);
                 }
+                
+                // Create tombstone record with effective_to = system_date
+                let system_date_time = system_date.and_hms_opt(0, 0, 0).unwrap_or_else(|| {
+                    panic!("Failed to convert system_date to datetime")
+                });
+                
+                // Use the same timestamp as regular update records for consistency
+                // Find any update record to get the processing timestamp
+                let current_timestamp = if updates.num_rows() > 0 {
+                    let upd_as_of_from_array = updates.column_by_name("as_of_from").unwrap()
+                        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                    extract_timestamp(upd_as_of_from_array, 0)  // Use first update's timestamp
+                } else {
+                    batch_timestamp  // Fallback if no updates
+                };
+                
+                // For tombstones, we need to collect both ID and value columns from the original record
+                let mut all_column_values = record.id_values.clone();
+                
+                // Add value columns from the current state record
+                if let Some(orig_idx) = record.original_index {
+                    for value_col in value_columns {
+                        let col_idx = current_state.schema().index_of(value_col).unwrap();
+                        let array = current_state.column(col_idx);
+                        all_column_values.push(ScalarValue::from_array(array, orig_idx));
+                    }
+                }
+                
+                let tombstone = BitemporalRecord {
+                    id_values: all_column_values,  // Include both ID and value columns for tombstone reconstruction
+                    value_hash: record.value_hash.clone(),
+                    effective_from: record.effective_from,
+                    effective_to: system_date_time,  // Truncate to system date
+                    as_of_from: current_timestamp,  // Use current timestamp like regular updates
+                    as_of_to: chrono::NaiveDate::from_ymd_opt(2260, 12, 31)
+                        .unwrap()
+                        .and_hms_opt(23, 59, 59)
+                        .unwrap(),
+                    original_index: None,  // Tombstones don't come from source data
+                };
+                tombstone_records.push(tombstone);
+            }
+            
+            // Create separate batch for tombstone records if any were created
+            if !tombstone_records.is_empty() {
+                let tombstone_batch = create_tombstone_batch(&tombstone_records, current_state)?;
+                insert_batches.push(tombstone_batch);
             }
         }
         return Ok((expire_indices, insert_batches));
@@ -188,28 +251,91 @@ fn process_id_group(
     
     if update_mode == UpdateMode::FullState {
         // In full state mode, only expire/insert records if values have actually changed
-        // Compare current records with update records to see if values changed
+        // Also create tombstone records for deleted items (exist in current but not in updates by ID)
+        
+        // First, collect all ID values present in updates
+        let mut update_id_set = std::collections::HashSet::new();
+        for update_record in &update_records {
+            update_id_set.insert(update_record.id_values.clone());
+        }
+        
+        let mut tombstone_records = Vec::new();
+        
+        
+        // Compare current records with update records
         for current_record in &current_records {
-            // Find corresponding update record with same temporal range
-            let matching_update = update_records.iter().find(|update_record| {
-                current_record.effective_from == update_record.effective_from &&
-                current_record.effective_to == update_record.effective_to
-            });
-            
-            if let Some(update_record) = matching_update {
-                // Found matching temporal range, check if values changed
-                if current_record.value_hash != update_record.value_hash {
-                    // Values changed, expire current and we'll insert the update later
+            // Check if this current record's ID exists in the updates at all
+            if update_id_set.contains(&current_record.id_values) {
+                // ID exists in updates, find corresponding update record
+                // In full_state mode, we need to handle temporal adjustments
+                let matching_update = update_records.iter().find(|update_record| {
+                    current_record.effective_from == update_record.effective_from
+                });
+                
+                if let Some(update_record) = matching_update {
+                    // Check if values or temporal range changed
+                    let values_changed = current_record.value_hash != update_record.value_hash;
+                    let temporal_changed = current_record.effective_to != update_record.effective_to;
+                    
+                    if values_changed || temporal_changed {
+                        // Either values or temporal range changed
+                        if let Some(orig_idx) = current_record.original_index {
+                            expire_indices.push(orig_idx);
+                        }
+                    }
+                    // If neither values nor temporal range changed, do nothing
+                } else {
+                    // No matching update record (different effective_from), expire this current record
                     if let Some(orig_idx) = current_record.original_index {
                         expire_indices.push(orig_idx);
                     }
                 }
-                // If values didn't change, do nothing (no expire, no insert)
             } else {
-                // No matching update record, expire this current record
+                // This current record's ID doesn't exist in updates - it's being deleted
+                // Expire the current record
                 if let Some(orig_idx) = current_record.original_index {
                     expire_indices.push(orig_idx);
                 }
+                
+                // Create tombstone record with effective_to = system_date
+                let system_date_time = system_date.and_hms_opt(0, 0, 0).unwrap_or_else(|| {
+                    panic!("Failed to convert system_date to datetime")
+                });
+                
+                // Use the same timestamp as regular update records for consistency
+                let current_timestamp = if updates.num_rows() > 0 {
+                    let upd_as_of_from_array = updates.column_by_name("as_of_from").unwrap()
+                        .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                    extract_timestamp(upd_as_of_from_array, 0)  // Use first update's timestamp
+                } else {
+                    batch_timestamp  // Fallback if no updates
+                };
+                
+                // For tombstones, we need to collect both ID and value columns from the original record
+                let mut all_column_values = current_record.id_values.clone();
+                
+                // Add value columns from the current state record
+                if let Some(orig_idx) = current_record.original_index {
+                    for value_col in value_columns {
+                        let col_idx = current_state.schema().index_of(value_col).unwrap();
+                        let array = current_state.column(col_idx);
+                        all_column_values.push(ScalarValue::from_array(array, orig_idx));
+                    }
+                }
+                
+                let tombstone = BitemporalRecord {
+                    id_values: all_column_values,  // Include both ID and value columns for tombstone reconstruction
+                    value_hash: current_record.value_hash.clone(),
+                    effective_from: current_record.effective_from,
+                    effective_to: system_date_time,  // Truncate to system date
+                    as_of_from: current_timestamp,  // Use consistent timestamp with regular updates
+                    as_of_to: chrono::NaiveDate::from_ymd_opt(2260, 12, 31)
+                        .unwrap()
+                        .and_hms_opt(23, 59, 59)
+                        .unwrap(),
+                    original_index: None,  // Tombstones don't come from source data
+                };
+                tombstone_records.push(tombstone);
             }
         }
         
@@ -238,6 +364,7 @@ fn process_id_group(
             }
         }
         
+        // Create batch from regular update records
         if !records_to_insert.is_empty() {
             let batch = crate::batch_utils::create_record_batch_from_records(
                 &records_to_insert,
@@ -246,6 +373,15 @@ fn process_id_group(
             )?;
             insert_batches.push(batch);
         }
+        
+        // Create separate batch for tombstone records (they don't have source rows)
+        if !tombstone_records.is_empty() {
+            // For tombstones, we need to create a batch from the record data itself
+            // Since tombstones use the same schema as updates, we can create a synthetic batch
+            let tombstone_batch = create_tombstone_batch(&tombstone_records, current_state)?;
+            insert_batches.push(tombstone_batch);
+        }
+        
     } else {
         // Delta mode - use concurrent pointer approach
         let (expire_idx, insert_batch) = process_id_timeline(
@@ -273,7 +409,7 @@ fn compute_changes(
     value_columns: Vec<String>,
     system_date: String,
     update_mode: String,
-) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>)> {
+) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
     // Convert PyRecordBatch to Arrow RecordBatch
     let current_batch = current_state.as_ref().clone();
     let updates_batch = updates.as_ref().clone();
@@ -305,8 +441,12 @@ fn compute_changes(
         .into_iter()
         .map(|batch| PyRecordBatch::new(batch))
         .collect();
+    let expired_batches: Vec<PyRecordBatch> = changeset.expired_records
+        .into_iter()
+        .map(|batch| PyRecordBatch::new(batch))
+        .collect();
     
-    Ok((expire_indices, insert_batches))
+    Ok((expire_indices, insert_batches, expired_batches))
 }
 
 #[pyfunction]
@@ -323,6 +463,143 @@ fn add_hash_key(
     
     // Convert back to PyRecordBatch
     Ok(PyRecordBatch::new(batch_with_hash))
+}
+
+/// Creates a RecordBatch from tombstone records using the same schema as the updates batch
+fn create_tombstone_batch(
+    tombstone_records: &[BitemporalRecord], 
+    updates: &RecordBatch
+) -> Result<RecordBatch, String> {
+    use arrow::array::{StringBuilder, Float64Builder, Int32Builder, TimestampMicrosecondArray};
+    use std::sync::Arc;
+    
+    if tombstone_records.is_empty() {
+        return Err("Cannot create batch from empty tombstone records".to_string());
+    }
+    
+    let schema = updates.schema();
+    let num_records = tombstone_records.len();
+    let mut columns: Vec<arrow::array::ArrayRef> = Vec::with_capacity(schema.fields().len());
+    
+    // Epoch for timestamp conversion
+    let epoch = chrono::DateTime::from_timestamp(0, 0)
+        .unwrap()
+        .naive_utc();
+    
+    for field in schema.fields() {
+        let column_name = field.name();
+        
+        match column_name.as_str() {
+            "effective_from" => {
+                let mut builder = TimestampMicrosecondArray::builder(num_records);
+                for record in tombstone_records {
+                    let microseconds = (record.effective_from - epoch).num_microseconds().unwrap();
+                    builder.append_value(microseconds);
+                }
+                columns.push(Arc::new(builder.finish()));
+            }
+            "effective_to" => {
+                let mut builder = TimestampMicrosecondArray::builder(num_records);
+                for record in tombstone_records {
+                    let microseconds = (record.effective_to - epoch).num_microseconds().unwrap();
+                    builder.append_value(microseconds);
+                }
+                columns.push(Arc::new(builder.finish()));
+            }
+            "as_of_from" => {
+                let mut builder = TimestampMicrosecondArray::builder(num_records);
+                for record in tombstone_records {
+                    let microseconds = (record.as_of_from - epoch).num_microseconds().unwrap();
+                    builder.append_value(microseconds);
+                }
+                columns.push(Arc::new(builder.finish()));
+            }
+            "as_of_to" => {
+                let mut builder = TimestampMicrosecondArray::builder(num_records);
+                for record in tombstone_records {
+                    let microseconds = (record.as_of_to - epoch).num_microseconds().unwrap();
+                    builder.append_value(microseconds);
+                }
+                columns.push(Arc::new(builder.finish()));
+            }
+            "value_hash" => {
+                let mut builder = StringBuilder::new();
+                for record in tombstone_records {
+                    builder.append_value(&record.value_hash);
+                }
+                columns.push(Arc::new(builder.finish()));
+            }
+            _ => {
+                // For ID and value columns, extract from BitemporalRecord.id_values
+                // The id_values array now contains both ID and value columns in schema order
+                let field_index = schema.index_of(column_name)
+                    .map_err(|_| format!("Column '{}' not found in schema", column_name))?;
+                
+                // Count non-temporal columns before this one to get the index in id_values
+                let mut data_value_index = 0;
+                for i in 0..field_index {
+                    let fname = schema.field(i).name();
+                    if !matches!(fname.as_str(), "effective_from" | "effective_to" | "as_of_from" | "as_of_to" | "value_hash") {
+                        data_value_index += 1;
+                    }
+                }
+                
+                // Build the column based on data type
+                match field.data_type() {
+                    arrow::datatypes::DataType::Utf8 => {
+                        let mut builder = StringBuilder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::String(s)) = record.id_values.get(data_value_index) {
+                                builder.append_value(s);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Int32 => {
+                        let mut builder = Int32Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Int32(i)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*i);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Int64 => {
+                        let mut builder = arrow::array::Int64Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Int64(i)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*i);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Float64 => {
+                        let mut builder = Float64Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Float64(f)) = record.id_values.get(data_value_index) {
+                                builder.append_value(f.0);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    _ => {
+                        return Err(format!("Unsupported data type for tombstone records: {:?}", field.data_type()));
+                    }
+                }
+            }
+        }
+    }
+    
+    RecordBatch::try_new(schema, columns)
+        .map_err(|e| format!("Failed to create tombstone RecordBatch: {}", e))
 }
 
 #[pymodule]

@@ -91,6 +91,7 @@ impl ScalarValue {
 pub struct ChangeSet {
     pub to_expire: Vec<usize>,
     pub to_insert: Vec<RecordBatch>,
+    pub expired_records: Vec<RecordBatch>,  // Expired records with updated as_of_to
 }
 
 #[derive(Debug, Clone)]

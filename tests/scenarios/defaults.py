@@ -1,11 +1,13 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Tuple, List, Callable, Literal
 
 import pandas as pd
 
 pd_max = pd.Timestamp.max
-pdt_past = pd.Timestamp.now() - pd.Timedelta(hours=1)
-pdt_now = pd.Timestamp.now()
+pdt_past = pd.Timestamp.now(tz='UTC').tz_localize(None) - pd.Timedelta(hours=1)
+pdt_now = pd.Timestamp.now(tz='UTC').tz_localize(None)
+pdt_today = pd.Timestamp(datetime.utcnow().strftime('%Y-%m-%d'))
 
 default_id_columns = ["id", "field"]
 default_value_columns = ["mv", "price"]

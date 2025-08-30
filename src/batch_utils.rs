@@ -318,6 +318,137 @@ pub fn hash_values_batch(
     hashes
 }
 
+/// Create a RecordBatch of expired records with updated as_of_to timestamp
+pub fn create_expired_records_batch(
+    current_state: &RecordBatch,
+    expire_indices: &[usize],
+    expiry_timestamp: chrono::NaiveDateTime,
+) -> Result<RecordBatch, String> {
+    if expire_indices.is_empty() {
+        return Err("Cannot create batch from empty expire indices".to_string());
+    }
+    
+    let schema = current_state.schema();
+    let num_records = expire_indices.len();
+    
+    // Pre-allocate builders with exact capacity
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
+    
+    for field in schema.fields() {
+        let column_name = field.name();
+        
+        if column_name == "as_of_to" {
+            // Set as_of_to to the expiry timestamp for all records
+            let mut builder = TimestampMicrosecondArray::builder(num_records);
+            for _ in expire_indices {
+                let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
+                builder.append_value(microseconds);
+            }
+            columns.push(Arc::new(builder.finish()));
+        } else {
+            // Copy data from original records at the specified indices
+            let orig_array = current_state.column_by_name(column_name).unwrap();
+            
+            // Handle different column types with pre-allocated builders
+            match orig_array.data_type() {
+                arrow::datatypes::DataType::Utf8 => {
+                    let string_array = orig_array.as_any()
+                        .downcast_ref::<arrow::array::StringArray>().unwrap();
+                    let mut builder = StringBuilder::new();
+                    for &idx in expire_indices {
+                        if string_array.is_null(idx) {
+                            builder.append_null();
+                        } else {
+                            builder.append_value(string_array.value(idx));
+                        }
+                    }
+                    columns.push(Arc::new(builder.finish()));
+                }
+                arrow::datatypes::DataType::Int32 => {
+                    let int32_array = orig_array.as_any()
+                        .downcast_ref::<arrow::array::Int32Array>().unwrap();
+                    let mut builder = Int32Builder::new();
+                    for &idx in expire_indices {
+                        if int32_array.is_null(idx) {
+                            builder.append_null();
+                        } else {
+                            builder.append_value(int32_array.value(idx));
+                        }
+                    }
+                    columns.push(Arc::new(builder.finish()));
+                }
+                arrow::datatypes::DataType::Int64 => {
+                    let int64_array = orig_array.as_any()
+                        .downcast_ref::<arrow::array::Int64Array>().unwrap();
+                    let mut builder = arrow::array::Int64Builder::new();
+                    for &idx in expire_indices {
+                        if int64_array.is_null(idx) {
+                            builder.append_null();
+                        } else {
+                            builder.append_value(int64_array.value(idx));
+                        }
+                    }
+                    columns.push(Arc::new(builder.finish()));
+                }
+                arrow::datatypes::DataType::Float64 => {
+                    let float64_array = orig_array.as_any()
+                        .downcast_ref::<arrow::array::Float64Array>().unwrap();
+                    let mut builder = Float64Builder::new();
+                    for &idx in expire_indices {
+                        if float64_array.is_null(idx) {
+                            builder.append_null();
+                        } else {
+                            builder.append_value(float64_array.value(idx));
+                        }
+                    }
+                    columns.push(Arc::new(builder.finish()));
+                }
+                arrow::datatypes::DataType::Date32 => {
+                    let date32_array = orig_array.as_any()
+                        .downcast_ref::<arrow::array::Date32Array>().unwrap();
+                    let mut builder = Date32Builder::new();
+                    for &idx in expire_indices {
+                        if date32_array.is_null(idx) {
+                            builder.append_null();
+                        } else {
+                            builder.append_value(date32_array.value(idx));
+                        }
+                    }
+                    columns.push(Arc::new(builder.finish()));
+                }
+                arrow::datatypes::DataType::Timestamp(_, _) => {
+                    let timestamp_array = orig_array.as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                    let mut builder = TimestampMicrosecondArray::builder(num_records);
+                    for &idx in expire_indices {
+                        if timestamp_array.is_null(idx) {
+                            builder.append_null();
+                        } else {
+                            builder.append_value(timestamp_array.value(idx));
+                        }
+                    }
+                    columns.push(Arc::new(builder.finish()));
+                }
+                _ => {
+                    // Fallback to slice method for unsupported types
+                    let mut slices = Vec::with_capacity(num_records);
+                    for &idx in expire_indices {
+                        slices.push(orig_array.slice(idx, 1));
+                    }
+                    // Concatenate slices - this is less efficient but handles all types
+                    let arrays: Vec<&dyn arrow::array::Array> = slices.iter().map(|a| a.as_ref()).collect();
+                    let result = arrow::compute::concat(&arrays)
+                        .map_err(|e| format!("Failed to concatenate arrays: {}", e))?;
+                    columns.push(result);
+                }
+            }
+        }
+    }
+    
+    RecordBatch::try_new(schema.clone(), columns)
+        .map_err(|e| format!("Failed to create expired records batch: {}", e))
+}
+
 /// Add a hash column to a RecordBatch using the same hash function as the internal algorithm
 /// This ensures complete consistency with the bitemporal processing logic
 pub fn add_hash_column(

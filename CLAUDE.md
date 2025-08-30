@@ -97,7 +97,92 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-08-29**: Changed hash implementation from Blake3 numeric values to SHA256 hex digest strings for client compatibility. Updated all schemas, tests, and benchmarks to use string-based hashes. Hash values now match Python's `hashlib.sha256().hexdigest()` format.
 - **2025-08-29**: Fixed full_state mode logic that was incorrectly expiring ALL current records regardless of value changes. Updated implementation to only expire/insert records when values actually change, using SHA256 hash comparison for efficiency. This prevents unnecessary database operations for unchanged records in full_state mode.
 
+## CRITICAL BUG: Full State Mode Missing Tombstone Records
+
+### 🐛 **ISSUE IDENTIFIED (2025-08-29)**
+Full state mode has a critical gap in deletion handling - it expires records that don't exist in the updates but fails to create tombstone records.
+
+### **Problem Description:**
+When using full_state mode, if a record exists in current state but NOT in updates, it should be "deleted":
+1. ✅ **Current Behavior**: The old record is correctly expired 
+2. ❌ **Missing Behavior**: A new tombstone record should be created with `effective_to = system_date`
+
+### **Example Scenario:**
+```
+Current State: ID=2, effective_to=INFINITY (2260-12-31)
+Updates: [ID=2 not present] 
+Expected Result:
+  - Expire: ID=2 with effective_to=INFINITY  
+  - Insert: ID=2 with effective_to=TODAY (tombstone)
+Actual Result:
+  - Expire: ID=2 with effective_to=INFINITY
+  - Insert: [nothing] ❌ MISSING TOMBSTONE
+```
+
+### **Impact:**
+- Records appear to be deleted from the perspective of expiration, but there's no historical record showing when they became ineffective
+- Violates bitemporal principles by not maintaining complete audit trail
+- Makes it impossible to query "what was the state as of date X" for deleted records
+
+### **Root Cause Location:**
+File: `/src/lib.rs`, lines ~189-248 (full_state mode logic)
+The algorithm correctly identifies records to expire but doesn't generate tombstone records for deletions.
+
+### **Failing Test:**
+- Test: `full_state_delete` in `tests/scenarios/basic.py`
+- Run: `uv run python -m pytest tests/test_bitemporal.py::test_update_scenarios -k "full_state_delete" -v`
+
+### **TODO for Tomorrow:**
+
+#### 🔧 **Implementation Tasks:**
+1. **Enhance full_state logic** to detect "deleted" records (exist in current, not in updates)
+2. **Create tombstone records** for deleted records with:
+   - Same ID values and value columns as expired record
+   - `effective_to = system_date` (truncate the effective period)
+   - `as_of_from = system_date` (new knowledge timestamp)
+   - `as_of_to = INFINITY`
+3. **Add tombstone records to insert batch** alongside regular updates
+
+#### 🧪 **Testing Tasks:**
+1. Fix failing test `full_state_delete`
+2. Add additional tombstone scenarios:
+   - Multiple deleted records
+   - Mixed updates and deletions
+   - Edge cases (records ending exactly on system_date)
+3. Verify no regression in existing full_state functionality
+
+#### 📚 **Documentation Tasks:**
+1. Update README.md full_state section to mention tombstone behavior
+2. Add tombstone example to documentation
+3. Update Python docstrings to clarify deletion behavior
+
+#### ⚡ **Performance Considerations:**
+- Tombstone generation should integrate with existing batch processing
+- Consider impact on conflation logic (tombstones may not conflate)
+- Ensure parallel processing compatibility
+
+### **Algorithm Sketch:**
+```rust
+// In full_state mode, after processing regular updates:
+for current_record in &current_records {
+    if !update_records.contains_matching_id(current_record.id_values) {
+        // This is a deletion - create tombstone
+        let tombstone = BitemporalRecord {
+            id_values: current_record.id_values.clone(),
+            value_hash: current_record.value_hash.clone(),
+            effective_from: current_record.effective_from,
+            effective_to: system_date,  // ← KEY: Truncate to system date
+            as_of_from: system_date,
+            as_of_to: INFINITY,
+            original_index: None,
+        };
+        tombstone_records.push(tombstone);
+    }
+}
+```
+
 ## Development Best Practices
 - Ensure to keep README.md up to date with changes to the code base or approach
+- **CRITICAL**: Fix the full_state tombstone issue before any production deployment
 
 This file should be updated whenever a new piece of context or information is added / discovered in this project

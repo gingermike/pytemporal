@@ -8,7 +8,7 @@ import pytest
 
 from pytemporal import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
 from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
-    append_head_exact, intersect, no_change, full_state_basic
+    append_head_exact, intersect, no_change, full_state_basic, full_state_delete
 from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \
     multi_intersection_multiple_point, multi_field, extend_current_row, extend_update, no_change_with_intersection
 from tests.scenarios.defaults import default_id_columns, default_value_columns, default_columns
@@ -25,6 +25,7 @@ scenarios = [
     intersect,
     no_change,
     full_state_basic,
+    full_state_delete,
 
     #complex
     overlay_two,

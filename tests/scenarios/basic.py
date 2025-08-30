@@ -2,7 +2,7 @@ from typing import Tuple, List
 from pandas import to_datetime as pdt
 
 from pytemporal import INFINITY_TIMESTAMP
-from tests.scenarios.defaults import pdt_now, pd_max, pdt_past, BitemporalScenario
+from tests.scenarios.defaults import pdt_now, pd_max, pdt_past, BitemporalScenario, pdt_today
 
 
 def _insert() -> Tuple[List, List, Tuple]:
@@ -204,6 +204,9 @@ def _no_change() -> Tuple[List, List, Tuple]:
 
 
 def _full_state_basic() -> Tuple[List, List, Tuple]:
+    """
+    Basic update of value and insert of new row using full state update
+    """
     return (
         [
             [1, "test", 100.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_past, pd_max],
@@ -226,6 +229,32 @@ def _full_state_basic() -> Tuple[List, List, Tuple]:
     )
 
 
+def _full_state_delete() -> Tuple[List, List, Tuple]:
+    """
+    Demonstrates how a how will get deleted if it no longer exists in the incoming data
+    """
+
+    return (
+        [
+            [1, "test", 100.0, 250.0, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
+            [2, "test2", 300.0, 400.0, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
+        ],
+        [
+            [1, "test", 150.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+        ],
+        (
+            [
+                [1, "test", 100.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_past, pd_max],
+                [2, "test2", 300.0, 400.0, pdt("2020-01-01"), INFINITY_TIMESTAMP, pdt_past, pd_max],
+            ],
+            [
+                [1, "test", 150.0, 250.0, pdt("2020-01-01"), pdt("2020-02-01"), pdt_now, pd_max],
+                [2, "test2", 300.0, 400.0, pdt("2020-01-01"), pdt_today, pdt_now, pd_max],
+            ]
+        )
+    )
+
+
 insert = BitemporalScenario("insert", _insert, "delta")
 overwrite = BitemporalScenario("overwrite", _overwrite, "delta")
 unrelated_state = BitemporalScenario("unrelated_state", _unrelated_state, "delta")
@@ -236,3 +265,4 @@ append_head_exact = BitemporalScenario("append_head_exact", _append_head_exact, 
 intersect = BitemporalScenario("intersect", _intersect, "delta")
 no_change = BitemporalScenario("no_change", _no_change, "delta")
 full_state_basic = BitemporalScenario("full_state_basic", _full_state_basic, "full_state")
+full_state_delete = BitemporalScenario("full_state_delete", _full_state_delete, "full_state")

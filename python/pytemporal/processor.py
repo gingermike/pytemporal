@@ -73,7 +73,7 @@ class BitemporalTimeseriesProcessor:
         
         # Call Rust function
         actual_system_date = system_date or datetime.now().strftime('%Y-%m-%d')
-        expire_indices, insert_batch = _compute_changes(
+        expire_indices, insert_batch, expired_batch = _compute_changes(
             current_batch,
             updates_batch,
             self.id_columns,
@@ -82,10 +82,50 @@ class BitemporalTimeseriesProcessor:
             update_mode
         )
         
-        # Extract rows to expire from original DataFrame
-        rows_to_expire = current_state.iloc[expire_indices].copy()
-        # Set as_of_to to current timestamp (when expiring the row)
-        rows_to_expire['as_of_to'] = pd.Timestamp.now()
+        # Use expired records from Rust (with updated as_of_to timestamps)
+        if expired_batch:
+            expired_dfs = []
+            for batch in expired_batch:
+                data = {}
+                col_names = batch.column_names
+                
+                for i in range(batch.num_columns):
+                    col_name = col_names[i]
+                    column = batch.column(i)
+                    col_data = column.to_pylist()
+                    data[col_name] = col_data
+                
+                expired_dfs.append(pd.DataFrame(data))
+            
+            rows_to_expire = pd.concat(expired_dfs, ignore_index=True) if expired_dfs else pd.DataFrame(columns=current_state.columns)
+        else:
+            rows_to_expire = pd.DataFrame(columns=current_state.columns)
+        
+        # In full_state mode, adjust effective_to for records that have temporal changes
+        if update_mode == 'full_state':
+            # Create a lookup for updates by ID values and effective_from
+            id_cols = self.id_columns
+            updates_lookup = {}
+            for _, update_row in updates.iterrows():
+                id_key = tuple(update_row[col] for col in id_cols)
+                effective_from = update_row['effective_from']
+                key = (id_key, effective_from)
+                updates_lookup[key] = update_row['effective_to']
+            
+            # Adjust effective_to for expire records that have matching updates with same effective_from
+            for idx in range(len(rows_to_expire)):
+                expire_row = rows_to_expire.iloc[idx]
+                id_key = tuple(expire_row[col] for col in id_cols)
+                effective_from = expire_row['effective_from']
+                key = (id_key, effective_from)
+                
+                if key in updates_lookup:
+                    # There's an update with the same ID and effective_from
+                    # Adjust the expire record's effective_to to match the update's effective_to
+                    update_effective_to = updates_lookup[key]
+                    rows_to_expire.iloc[idx, rows_to_expire.columns.get_loc('effective_to')] = update_effective_to
+        
+        # as_of_to is now set by Rust layer
         
         # Convert insert batches back to pandas and combine them
         if insert_batch:
