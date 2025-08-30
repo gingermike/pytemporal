@@ -15,7 +15,11 @@ from .pytemporal import compute_changes as _compute_changes, add_hash_key as _ad
 # Infinity date representation - use a safe date that doesn't overflow pandas
 INFINITY_TIMESTAMP = pd.Timestamp('2260-12-31 23:59:59')
 
-# Pandas maximum timestamp (approximately 2262-04-11)
+# Safe maximum timestamp that won't overflow when timezone-localized
+# Use a timestamp well before pandas max to avoid overflow during tz operations
+SAFE_MAX_TIMESTAMP = pd.Timestamp('2260-12-31 23:59:59')
+
+# Pandas maximum timestamp (approximately 2262-04-11) - use cautiously
 PANDAS_MAX_TIMESTAMP = pd.Timestamp.max
 
 class BitemporalTimeseriesProcessor:
@@ -169,22 +173,52 @@ class BitemporalTimeseriesProcessor:
         # Handle effective date columns (convert to dates)
         for col in effective_date_columns:
             if col in df.columns:
+                # Only convert to datetime if not already a datetime type (preserve timezone info)
+                if not pd.api.types.is_datetime64_any_dtype(df[col]):
+                    df[col] = pd.to_datetime(df[col])
+                
+                # Handle null values and infinity replacement with timezone awareness
+                fill_value = SAFE_MAX_TIMESTAMP
+                infinity_threshold = pd.Timestamp('9999-01-01')
+                replacement_value = SAFE_MAX_TIMESTAMP
+                
+                if (hasattr(df[col].dtype, 'tz') and df[col].dtype.tz is not None) or \
+                   (hasattr(df[col], 'dt') and df[col].dt.tz is not None):
+                    # Column is timezone-aware, make all values timezone-aware too
+                    col_tz = getattr(df[col].dtype, 'tz', None) or df[col].dt.tz
+                    fill_value = fill_value.tz_localize(col_tz)
+                    infinity_threshold = infinity_threshold.tz_localize(col_tz)
+                    replacement_value = replacement_value.tz_localize(col_tz)
+                
                 # Replace null with pandas max timestamp
-                df[col] = df[col].fillna(PANDAS_MAX_TIMESTAMP)
-                # Replace infinity with pandas max timestamp
-                df[col] = pd.to_datetime(df[col])
-                df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
+                df[col] = df[col].fillna(fill_value)
+                df.loc[df[col] >= infinity_threshold, col] = replacement_value
                 
                 # Keep as timestamp for processing (timestamp precision)
         
         # Handle as_of timestamp columns (preserve timestamp precision)
         for col in as_of_timestamp_columns:
             if col in df.columns:
+                # Only convert to datetime if not already a datetime type (preserve timezone info)
+                if not pd.api.types.is_datetime64_any_dtype(df[col]):
+                    df[col] = pd.to_datetime(df[col])
+                
+                # Handle null values and infinity replacement with timezone awareness
+                fill_value = SAFE_MAX_TIMESTAMP
+                infinity_threshold = pd.Timestamp('9999-01-01')
+                replacement_value = SAFE_MAX_TIMESTAMP
+                
+                if (hasattr(df[col].dtype, 'tz') and df[col].dtype.tz is not None) or \
+                   (hasattr(df[col], 'dt') and df[col].dt.tz is not None):
+                    # Column is timezone-aware, make all values timezone-aware too
+                    col_tz = getattr(df[col].dtype, 'tz', None) or df[col].dt.tz
+                    fill_value = fill_value.tz_localize(col_tz)
+                    infinity_threshold = infinity_threshold.tz_localize(col_tz)
+                    replacement_value = replacement_value.tz_localize(col_tz)
+                
                 # Replace null with pandas max timestamp
-                df[col] = df[col].fillna(PANDAS_MAX_TIMESTAMP)
-                # Replace infinity with pandas max timestamp
-                df[col] = pd.to_datetime(df[col])
-                df.loc[df[col] >= pd.Timestamp('9999-01-01'), col] = PANDAS_MAX_TIMESTAMP
+                df[col] = df[col].fillna(fill_value)
+                df.loc[df[col] >= infinity_threshold, col] = replacement_value
                 
                 # Keep as timestamp for microsecond precision
                 # Note: pandas uses nanosecond precision, which is compatible with Arrow timestamp[ns]
