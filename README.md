@@ -269,6 +269,39 @@ Original:  ID=3, mv=500, price=600, effective=[2020-01-01, INFINITY]
 Tombstone: ID=3, mv=500, price=600, effective=[2020-01-01, 2025-08-30]  # Truncated to system_date
 ```
 
+### Timezone Handling
+
+The library seamlessly handles timezone-aware timestamps from databases like PostgreSQL:
+
+```python
+# PostgreSQL timestamptz columns (timezone-aware)
+current_state = pd.DataFrame({
+    'id': [1],
+    'value': ['test'],
+    'effective_from': pd.Timestamp("2024-01-01", tz='UTC'),  # timezone-aware
+    'effective_to': pd.Timestamp("2099-12-31", tz='UTC'),
+    # ... other columns
+})
+
+# Client updates (often timezone-naive)  
+updates = pd.DataFrame({
+    'id': [1],
+    'value': ['updated'],
+    'effective_from': pd.Timestamp("2024-01-02"),  # timezone-naive
+    'effective_to': pd.Timestamp("2099-12-31"),
+    # ... other columns
+})
+
+# Automatically handles timezone normalization
+rows_to_expire, rows_to_insert = processor.compute_changes(current_state, updates)
+```
+
+**Key Features:**
+- **Automatic Schema Normalization**: Mixed timezone-aware and timezone-naive timestamps are automatically reconciled
+- **PostgreSQL Compatible**: Seamless integration with `timestamptz` columns
+- **Timezone Preservation**: Original timezone information is preserved throughout the processing pipeline
+- **Arrow Schema Compatibility**: Ensures consistent `timestamp[us, tz=UTC]` schemas for Rust processing
+
 ### Parallelization Strategy
 
 The algorithm uses adaptive parallelization:

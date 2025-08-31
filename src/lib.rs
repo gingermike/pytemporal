@@ -1,4 +1,5 @@
 use arrow::array::{RecordBatch, TimestampMicrosecondArray};
+use arrow::datatypes::DataType;
 use chrono::NaiveDate;
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
@@ -494,36 +495,60 @@ fn create_tombstone_batch(
         
         match column_name.as_str() {
             "effective_from" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in tombstone_records {
-                    let microseconds = (record.effective_from - epoch).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                // Extract timezone from original schema
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                // Create values with timezone preservation
+                let values: Vec<Option<i64>> = tombstone_records.iter()
+                    .map(|record| Some((record.effective_from - epoch).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "effective_to" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in tombstone_records {
-                    let microseconds = (record.effective_to - epoch).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                // Extract timezone from original schema
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                // Create values with timezone preservation
+                let values: Vec<Option<i64>> = tombstone_records.iter()
+                    .map(|record| Some((record.effective_to - epoch).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "as_of_from" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in tombstone_records {
-                    let microseconds = (record.as_of_from - epoch).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                // Extract timezone from original schema
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                // Create values with timezone preservation
+                let values: Vec<Option<i64>> = tombstone_records.iter()
+                    .map(|record| Some((record.as_of_from - epoch).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "as_of_to" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in tombstone_records {
-                    let microseconds = (record.as_of_to - epoch).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                // Extract timezone from original schema
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                // Create values with timezone preservation
+                let values: Vec<Option<i64>> = tombstone_records.iter()
+                    .map(|record| Some((record.as_of_to - epoch).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "value_hash" => {
                 let mut builder = StringBuilder::new();

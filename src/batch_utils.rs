@@ -47,12 +47,12 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
     format!("{:x}", hasher.finalize())
 }
 
-// Helper function to create a timestamp array from a NaiveDateTime
-fn create_timestamp_array(datetime: NaiveDateTime) -> ArrayRef {
-    let mut builder = TimestampMicrosecondArray::builder(1);
+// Helper function to create a timestamp array from a NaiveDateTime with timezone support
+fn create_timestamp_array(datetime: NaiveDateTime, timezone: Option<String>) -> ArrayRef {
     let microseconds = (datetime - EPOCH).num_microseconds().unwrap();
-    builder.append_value(microseconds);
-    Arc::new(builder.finish())
+    let values = vec![Some(microseconds)];
+    let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone);
+    Arc::new(array)
 }
 
 // Helper function to create a value hash array
@@ -76,16 +76,28 @@ fn build_temporal_columns(
         
         match column_name.as_str() {
             "effective_from" => {
-                columns.push(create_timestamp_array(record.effective_from));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                columns.push(create_timestamp_array(record.effective_from, timezone_str));
             }
             "effective_to" => {
-                columns.push(create_timestamp_array(record.effective_to));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                columns.push(create_timestamp_array(record.effective_to, timezone_str));
             }
             "as_of_from" => {
-                columns.push(create_timestamp_array(record.as_of_from));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                columns.push(create_timestamp_array(record.as_of_from, timezone_str));
             }
             "as_of_to" => {
-                columns.push(create_timestamp_array(record.as_of_to));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                columns.push(create_timestamp_array(record.as_of_to, timezone_str));
             }
             "value_hash" => {
                 columns.push(create_value_hash_array(&record.value_hash));
@@ -150,36 +162,52 @@ pub fn create_record_batch_from_records(
         
         match column_name.as_str() {
             "effective_from" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in records {
-                    let microseconds = (record.effective_from - EPOCH).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                let values: Vec<Option<i64>> = records.iter()
+                    .map(|record| Some((record.effective_from - EPOCH).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "effective_to" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in records {
-                    let microseconds = (record.effective_to - EPOCH).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                let values: Vec<Option<i64>> = records.iter()
+                    .map(|record| Some((record.effective_to - EPOCH).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "as_of_from" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in records {
-                    let microseconds = (record.as_of_from - EPOCH).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                let values: Vec<Option<i64>> = records.iter()
+                    .map(|record| Some((record.as_of_from - EPOCH).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "as_of_to" => {
-                let mut builder = TimestampMicrosecondArray::builder(num_records);
-                for record in records {
-                    let microseconds = (record.as_of_to - EPOCH).num_microseconds().unwrap();
-                    builder.append_value(microseconds);
-                }
-                columns.push(Arc::new(builder.finish()));
+                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                    tz.as_ref().map(|t| t.to_string())
+                } else { None };
+                
+                let values: Vec<Option<i64>> = records.iter()
+                    .map(|record| Some((record.as_of_to - EPOCH).num_microseconds().unwrap()))
+                    .collect();
+                
+                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                columns.push(Arc::new(array));
             }
             "value_hash" => {
                 let mut builder = StringBuilder::new();
@@ -341,12 +369,17 @@ pub fn create_expired_records_batch(
         
         if column_name == "as_of_to" {
             // Set as_of_to to the expiry timestamp for all records
-            let mut builder = TimestampMicrosecondArray::builder(num_records);
-            for _ in expire_indices {
-                let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
-                builder.append_value(microseconds);
-            }
-            columns.push(Arc::new(builder.finish()));
+            let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                tz.as_ref().map(|t| t.to_string())
+            } else { None };
+            
+            let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
+            let values: Vec<Option<i64>> = expire_indices.iter()
+                .map(|_| Some(microseconds))
+                .collect();
+            
+            let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+            columns.push(Arc::new(array));
         } else {
             // Copy data from original records at the specified indices
             let orig_array = current_state.column_by_name(column_name).unwrap();
@@ -418,59 +451,87 @@ pub fn create_expired_records_batch(
                     }
                     columns.push(Arc::new(builder.finish()));
                 }
-                arrow::datatypes::DataType::Timestamp(time_unit, _) => {
+                arrow::datatypes::DataType::Timestamp(time_unit, timezone) => {
                     match time_unit {
                         arrow::datatypes::TimeUnit::Microsecond => {
                             let timestamp_array = orig_array.as_any()
                                 .downcast_ref::<TimestampMicrosecondArray>().unwrap();
-                            let mut builder = TimestampMicrosecondArray::builder(num_records);
+                            
+                            // Extract values and nulls
+                            let mut values = Vec::with_capacity(num_records);
                             for &idx in expire_indices {
                                 if timestamp_array.is_null(idx) {
-                                    builder.append_null();
+                                    values.push(None);
                                 } else {
-                                    builder.append_value(timestamp_array.value(idx));
+                                    values.push(Some(timestamp_array.value(idx)));
                                 }
                             }
-                            columns.push(Arc::new(builder.finish()));
+                            
+                            // Create array with proper timezone information  
+                            let timezone_str = timezone.as_ref().map(|tz| tz.to_string());
+                            let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                            
+                            columns.push(Arc::new(array));
                         }
                         arrow::datatypes::TimeUnit::Nanosecond => {
                             let timestamp_array = orig_array.as_any()
                                 .downcast_ref::<arrow::array::TimestampNanosecondArray>().unwrap();
-                            let mut builder = arrow::array::TimestampNanosecondArray::builder(num_records);
+                            
+                            // Extract values and nulls
+                            let mut values = Vec::with_capacity(num_records);
                             for &idx in expire_indices {
                                 if timestamp_array.is_null(idx) {
-                                    builder.append_null();
+                                    values.push(None);
                                 } else {
-                                    builder.append_value(timestamp_array.value(idx));
+                                    values.push(Some(timestamp_array.value(idx)));
                                 }
                             }
-                            columns.push(Arc::new(builder.finish()));
+                            
+                            // Create array with proper timezone information  
+                            let timezone_str = timezone.as_ref().map(|tz| tz.to_string());
+                            let array = arrow::array::TimestampNanosecondArray::from(values).with_timezone_opt(timezone_str);
+                            
+                            columns.push(Arc::new(array));
                         }
                         arrow::datatypes::TimeUnit::Millisecond => {
                             let timestamp_array = orig_array.as_any()
                                 .downcast_ref::<arrow::array::TimestampMillisecondArray>().unwrap();
-                            let mut builder = arrow::array::TimestampMillisecondArray::builder(num_records);
+                            
+                            // Extract values and nulls
+                            let mut values = Vec::with_capacity(num_records);
                             for &idx in expire_indices {
                                 if timestamp_array.is_null(idx) {
-                                    builder.append_null();
+                                    values.push(None);
                                 } else {
-                                    builder.append_value(timestamp_array.value(idx));
+                                    values.push(Some(timestamp_array.value(idx)));
                                 }
                             }
-                            columns.push(Arc::new(builder.finish()));
+                            
+                            // Create array with proper timezone information  
+                            let timezone_str = timezone.as_ref().map(|tz| tz.to_string());
+                            let array = arrow::array::TimestampMillisecondArray::from(values).with_timezone_opt(timezone_str);
+                            
+                            columns.push(Arc::new(array));
                         }
                         arrow::datatypes::TimeUnit::Second => {
                             let timestamp_array = orig_array.as_any()
                                 .downcast_ref::<arrow::array::TimestampSecondArray>().unwrap();
-                            let mut builder = arrow::array::TimestampSecondArray::builder(num_records);
+                            
+                            // Extract values and nulls
+                            let mut values = Vec::with_capacity(num_records);
                             for &idx in expire_indices {
                                 if timestamp_array.is_null(idx) {
-                                    builder.append_null();
+                                    values.push(None);
                                 } else {
-                                    builder.append_value(timestamp_array.value(idx));
+                                    values.push(Some(timestamp_array.value(idx)));
                                 }
                             }
-                            columns.push(Arc::new(builder.finish()));
+                            
+                            // Create array with proper timezone information  
+                            let timezone_str = timezone.as_ref().map(|tz| tz.to_string());
+                            let array = arrow::array::TimestampSecondArray::from(values).with_timezone_opt(timezone_str);
+                            
+                            columns.push(Arc::new(array));
                         }
                     }
                 }

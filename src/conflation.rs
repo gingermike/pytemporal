@@ -1,6 +1,7 @@
 use crate::types::*;
 use crate::batch_utils::extract_date_as_datetime;
 use arrow::array::{RecordBatch, TimestampMicrosecondArray, StringArray, ArrayRef};
+use arrow::datatypes::DataType;
 use std::sync::Arc;
 use chrono::NaiveDateTime;
 
@@ -97,11 +98,15 @@ fn extend_batch_to_date(batch: RecordBatch, new_effective_to: NaiveDateTime) -> 
         let column_name = field.name();
         
         if column_name == "effective_to" {
-            let mut builder = TimestampMicrosecondArray::builder(1);
+            let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
+                tz.as_ref().map(|t| t.to_string())
+            } else { None };
+            
             let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
             let microseconds = (new_effective_to - epoch).num_microseconds().unwrap();
-            builder.append_value(microseconds);
-            columns.push(Arc::new(builder.finish()));
+            let values = vec![Some(microseconds)];
+            let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+            columns.push(Arc::new(array));
         } else {
             // Copy original column
             columns.push(batch.column_by_name(column_name).unwrap().clone());

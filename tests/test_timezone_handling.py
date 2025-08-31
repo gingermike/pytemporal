@@ -252,3 +252,94 @@ class TestTimezoneHandling:
             
         except Exception as e:
             pytest.fail(f"PostgreSQL timestamptz scenario failed: {e}")
+
+    def test_schema_conversion_preserves_timezone(self):
+        """Test that the internal schema conversion pipeline preserves timezone information."""
+        processor = BitemporalTimeseriesProcessor(
+            id_columns=['portfolio_id', 'security_id'],
+            value_columns=['quantity', 'price']
+        )
+        
+        # PostgreSQL timestamptz (timezone-aware) current state
+        pg_utc = pytz.UTC
+        current_state = pd.DataFrame([
+            {
+                "portfolio_id": 1,
+                "security_id": "AAPL",
+                "quantity": 100,
+                "price": 150.25,
+                "effective_from": pd.Timestamp("2024-01-01", tz=pg_utc),
+                "effective_to": pd.Timestamp("2099-12-31", tz=pg_utc),
+                "as_of_from": pd.Timestamp("2024-01-01 09:30:00", tz=pg_utc),
+                "as_of_to": pd.Timestamp("2099-12-31 23:59:59", tz=pg_utc),
+            }
+        ])
+        
+        # Timezone-naive updates (typical client application)
+        updates = pd.DataFrame([
+            {
+                "portfolio_id": 1,
+                "security_id": "AAPL", 
+                "quantity": 200,
+                "price": 155.50,
+                "effective_from": pd.Timestamp("2024-01-02"),
+                "effective_to": pd.Timestamp("2099-12-31"),
+                "as_of_from": pd.Timestamp("2024-01-02 10:00:00"),
+                "as_of_to": pd.Timestamp("2099-12-31 23:59:59"),
+            }
+        ])
+        
+        # Test the schema conversion pipeline step by step
+        import pyarrow as pa
+        
+        # 1. Prepare DataFrames  
+        prepared_current = processor._prepare_dataframe(current_state)
+        prepared_updates = processor._prepare_dataframe(updates)
+        
+        # 2. Normalize schemas (this should make both timezone-aware)
+        normalized_current, normalized_updates = processor._normalize_schemas(prepared_current, prepared_updates)
+        
+        # Verify both DataFrames now have consistent timezone-aware timestamps
+        timestamp_cols = ['effective_from', 'effective_to', 'as_of_from', 'as_of_to']
+        for col in timestamp_cols:
+            # Both should be timezone-aware after normalization
+            assert normalized_current[col].dt.tz is not None, f"Current {col} should be timezone-aware"
+            assert normalized_updates[col].dt.tz is not None, f"Updates {col} should be timezone-aware"
+            # And should have the same timezone
+            assert normalized_current[col].dt.tz == normalized_updates[col].dt.tz, f"Timezone mismatch in {col}"
+        
+        # 3. Convert to Arrow RecordBatches
+        current_batch = pa.RecordBatch.from_pandas(normalized_current)
+        updates_batch = pa.RecordBatch.from_pandas(normalized_updates)
+        
+        # 4. Convert timestamps to microseconds (Rust-compatible)
+        current_batch_us = processor._convert_timestamps_to_microseconds(current_batch)
+        updates_batch_us = processor._convert_timestamps_to_microseconds(updates_batch)
+        
+        # 5. Verify schema compatibility - this is the critical test!
+        for i, (curr_field, upd_field) in enumerate(zip(current_batch_us.schema, updates_batch_us.schema)):
+            assert curr_field.type == upd_field.type, f"Schema mismatch at column {i} ({curr_field.name}): {curr_field.type} != {upd_field.type}"
+            
+            # Specifically check timezone preservation for timestamp columns
+            if curr_field.name in timestamp_cols:
+                assert str(curr_field.type).startswith("timestamp[us, tz="), f"Column {curr_field.name} should be timezone-aware: {curr_field.type}"
+                assert str(upd_field.type).startswith("timestamp[us, tz="), f"Column {upd_field.name} should be timezone-aware: {upd_field.type}"
+        
+        # 6. Final verification: the Rust call should succeed without schema errors
+        try:
+            from pytemporal.pytemporal import compute_changes as _compute_changes
+            expire_indices, insert_batch, expired_batch = _compute_changes(
+                current_batch_us,
+                updates_batch_us, 
+                ['portfolio_id', 'security_id'],
+                ['quantity', 'price'],
+                '2025-08-31',
+                'delta'
+            )
+            # If we get here without a schema error, the fix is working!
+            assert isinstance(expire_indices, list)
+            assert expired_batch is not None
+            assert insert_batch is not None
+            
+        except Exception as e:
+            pytest.fail(f"Schema conversion pipeline failed at Rust layer: {e}")

@@ -67,6 +67,9 @@ class BitemporalTimeseriesProcessor:
         current_state = self._prepare_dataframe(current_state)
         updates = self._prepare_dataframe(updates)
         
+        # Normalize schemas to ensure timezone consistency between DataFrames
+        current_state, updates = self._normalize_schemas(current_state, updates)
+        
         # Convert pandas DataFrames to Arrow RecordBatches
         current_batch = pa.RecordBatch.from_pandas(current_state)
         updates_batch = pa.RecordBatch.from_pandas(updates)
@@ -229,6 +232,51 @@ class BitemporalTimeseriesProcessor:
         
         return df
     
+    def _normalize_schemas(self, current_state: pd.DataFrame, updates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Normalize schemas between current_state and updates to ensure timezone consistency.
+        This prevents Arrow schema mismatches when one DataFrame has timezone-aware columns
+        and the other has timezone-naive columns.
+        """
+        current_state = current_state.copy()
+        updates = updates.copy()
+        
+        timestamp_columns = ['effective_from', 'effective_to', 'as_of_from', 'as_of_to']
+        
+        for col in timestamp_columns:
+            if col in current_state.columns and col in updates.columns:
+                current_tz = None
+                updates_tz = None
+                
+                # Get timezone info from current_state
+                if hasattr(current_state[col].dtype, 'tz') and current_state[col].dtype.tz is not None:
+                    current_tz = current_state[col].dtype.tz
+                elif hasattr(current_state[col], 'dt') and current_state[col].dt.tz is not None:
+                    current_tz = current_state[col].dt.tz
+                
+                # Get timezone info from updates
+                if hasattr(updates[col].dtype, 'tz') and updates[col].dtype.tz is not None:
+                    updates_tz = updates[col].dtype.tz
+                elif hasattr(updates[col], 'dt') and updates[col].dt.tz is not None:
+                    updates_tz = updates[col].dt.tz
+                
+                # Normalize to a common timezone representation
+                if current_tz is not None and updates_tz is None:
+                    # Current has timezone, updates doesn't - add timezone to updates
+                    # Assume updates are in the same timezone as current (common case)
+                    updates[col] = updates[col].dt.tz_localize(current_tz)
+                elif current_tz is None and updates_tz is not None:
+                    # Updates has timezone, current doesn't - add timezone to current
+                    # Assume current is in the same timezone as updates
+                    current_state[col] = current_state[col].dt.tz_localize(updates_tz)
+                elif current_tz is not None and updates_tz is not None and current_tz != updates_tz:
+                    # Both have different timezones - convert updates to current's timezone
+                    updates[col] = updates[col].dt.tz_convert(current_tz)
+                
+                # If both are None (timezone-naive), leave them as-is
+        
+        return current_state, updates
+    
     def _convert_timestamps_to_microseconds(self, batch: pa.RecordBatch) -> pa.RecordBatch:
         """
         Convert timestamp columns to microseconds for Rust compatibility.
@@ -243,29 +291,33 @@ class BitemporalTimeseriesProcessor:
             # Convert as_of timestamp columns from ns to us
             if field.name in ['as_of_from', 'as_of_to'] and pa.types.is_timestamp(field.type):
                 if field.type.unit == 'ns':
+                    # Preserve timezone information during conversion
+                    target_type = pa.timestamp('us', tz=field.type.tz)
                     # Handle pandas max timestamp which is too large for microseconds
                     # Cast with safe conversion that truncates nanoseconds
                     try:
-                        column = column.cast(pa.timestamp('us'))
+                        column = column.cast(target_type)
                     except pa.ArrowInvalid:
                         # If casting fails due to overflow, manually convert
                         # This happens with pd.Timestamp.max
                         np_array = column.to_pandas().values
                         # Convert to microseconds by dividing nanoseconds by 1000
                         us_values = np_array.astype('datetime64[us]')
-                        column = pa.array(us_values, type=pa.timestamp('us'))
+                        column = pa.array(us_values, type=target_type)
             
             # Convert effective timestamp columns from ns to us
             elif field.name in ['effective_from', 'effective_to'] and pa.types.is_timestamp(field.type):
                 if field.type.unit == 'ns':
+                    # Preserve timezone information during conversion
+                    target_type = pa.timestamp('us', tz=field.type.tz)
                     # Convert nanosecond timestamps to microsecond timestamps
                     try:
-                        column = column.cast(pa.timestamp('us'))
+                        column = column.cast(target_type)
                     except pa.ArrowInvalid:
                         # If casting fails due to overflow, manually convert
                         np_array = column.to_pandas().values
                         us_values = np_array.astype('datetime64[us]')
-                        column = pa.array(us_values, type=pa.timestamp('us'))
+                        column = pa.array(us_values, type=target_type)
             
             # Convert effective date columns from Date32 to Timestamp  
             elif field.name in ['effective_from', 'effective_to'] and pa.types.is_date32(field.type):
@@ -276,12 +328,14 @@ class BitemporalTimeseriesProcessor:
             
             columns.append(column)
         
-        # Create new schema with updated timestamp types
+        # Create new schema with updated timestamp types (preserving timezone info)
         new_fields = []
         for field in schema:
             if field.name in ['as_of_from', 'as_of_to', 'effective_from', 'effective_to'] and pa.types.is_timestamp(field.type):
-                new_fields.append(pa.field(field.name, pa.timestamp('us'), field.nullable))
+                # Preserve timezone information when updating to microseconds
+                new_fields.append(pa.field(field.name, pa.timestamp('us', tz=field.type.tz), field.nullable))
             elif field.name in ['effective_from', 'effective_to'] and pa.types.is_date32(field.type):
+                # Date32 columns don't have timezone, so use None
                 new_fields.append(pa.field(field.name, pa.timestamp('us'), field.nullable))
             else:
                 new_fields.append(field)
@@ -337,17 +391,35 @@ class BitemporalTimeseriesProcessor:
                     # 3. Dates exactly equal to pandas max
                     is_nat_mask = pd.isna(df[col])
                     is_large_date_mask = df[col].dt.year >= 2262
-                    is_max_timestamp_mask = df[col] >= pd.Timestamp('2262-04-01')
+                    
+                    # Create timezone-aware comparison timestamp if needed
+                    max_timestamp_threshold = pd.Timestamp('2262-04-01')
+                    if (hasattr(df[col].dtype, 'tz') and df[col].dtype.tz is not None) or \
+                       (hasattr(df[col], 'dt') and df[col].dt.tz is not None):
+                        col_tz = getattr(df[col].dtype, 'tz', None) or df[col].dt.tz
+                        max_timestamp_threshold = max_timestamp_threshold.tz_localize(col_tz)
+                    
+                    is_max_timestamp_mask = df[col] >= max_timestamp_threshold
                     
                     infinity_mask = is_nat_mask | is_large_date_mask | is_max_timestamp_mask
                     
                     if infinity_mask.any():
                         # Replace infinity values with infinity date
-                        df.loc[infinity_mask, col] = INFINITY_TIMESTAMP
+                        infinity_replacement = INFINITY_TIMESTAMP
+                        if (hasattr(df[col].dtype, 'tz') and df[col].dtype.tz is not None) or \
+                           (hasattr(df[col], 'dt') and df[col].dt.tz is not None):
+                            col_tz = getattr(df[col].dtype, 'tz', None) or df[col].dt.tz
+                            infinity_replacement = infinity_replacement.tz_localize(col_tz)
+                        df.loc[infinity_mask, col] = infinity_replacement
                         
                 except (pd.errors.OutOfBoundsDatetime, OverflowError, AttributeError):
                     # If any conversion fails due to overflow, assume entire column needs infinity
-                    df[col] = INFINITY_TIMESTAMP
+                    infinity_replacement = INFINITY_TIMESTAMP
+                    if (hasattr(df[col].dtype, 'tz') and df[col].dtype.tz is not None) or \
+                       (hasattr(df[col], 'dt') and df[col].dt.tz is not None):
+                        col_tz = getattr(df[col].dtype, 'tz', None) or df[col].dt.tz
+                        infinity_replacement = infinity_replacement.tz_localize(col_tz)
+                    df[col] = infinity_replacement
         
         return df
     
