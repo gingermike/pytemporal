@@ -41,6 +41,7 @@ jobs:
     strategy:
       matrix:
         target: [x86_64]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
     steps:
     - uses: actions/checkout@v4
     
@@ -74,10 +75,10 @@ jobs:
         echo "Updated pyproject.toml:"
         grep "^version" pyproject.toml
         
-    - name: Set up Python
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python-version }}
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -90,13 +91,19 @@ jobs:
       run: uv pip install maturin[patchelf]
     - name: Build wheel
       run: |
+        # Use the specific Python version set up by actions/setup-python
         PYTHON_PATH=$(which python3)
-        echo "Using Python interpreter: $PYTHON_PATH"
-        uv run maturin build --release --out dist --find-interpreter
+        echo "Using Python interpreter: $PYTHON_PATH (${{ matrix.python-version }})"
+        python3 --version
+        
+        # Build wheel for this specific Python version
+        uv run maturin build --release --out dist --interpreter $PYTHON_PATH
+    - name: List built wheels
+      run: ls -la dist/
     - name: Upload wheel as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: wheels-linux-${{ matrix.target }}
+        name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
 
   publish-release:
@@ -115,10 +122,10 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "FULL_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
     
-    - name: Download wheel artifacts
+    - name: Download all wheel artifacts
       uses: actions/download-artifact@v4
       with:
-        pattern: wheels-*
+        pattern: wheels-linux-*
         path: dist-all/
         
     - name: Download benchmark artifacts
@@ -127,11 +134,17 @@ jobs:
         name: benchmarks-${{ steps.version.outputs.FULL_TAG }}
         path: benchmark-artifacts/
         
+    - name: Flatten wheel directory
+      run: |
+        mkdir -p dist/
+        find dist-all/ -name "*.whl" -exec cp {} dist/ \;
+        ls -la dist/
+        
     - name: Prepare release assets
       run: |
         mkdir -p release-assets/
         # Copy wheels
-        find dist-all/ -name "*.whl" -exec cp {} release-assets/ \;
+        cp dist/*.whl release-assets/
         # Copy benchmark ZIP
         find benchmark-artifacts/ -name "*.zip" -exec cp {} release-assets/ \;
         ls -la release-assets/
@@ -153,6 +166,9 @@ jobs:
           📊 **[View Interactive Benchmark Reports](https://gingermike.github.io/pytemporal/)**
           
           📦 **Download Complete Benchmark Data**: `benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip` (includes flamegraphs)
+
+          ## Linux Wheels Built
+          - x86_64 (Intel/AMD 64-bit) for Python 3.9, 3.10, 3.11, 3.12
 
           ## Features
           - High-performance bitemporal timeseries processing  
@@ -441,11 +457,17 @@ jobs:
       - name: Check out repository (needed by pypa publish action)
         uses: actions/checkout@v4
 
-      - name: Download built wheel artifacts
+      - name: Download all built wheel artifacts
         uses: actions/download-artifact@v4
         with:
-          name: wheels-linux-x86_64   # match the artifact name from build-linux-wheels
-          path: dist/
+          pattern: wheels-linux-*
+          path: dist-all/
+          
+      - name: Flatten wheel directory for PyPI
+        run: |
+          mkdir -p dist/
+          find dist-all/ -name "*.whl" -exec cp {} dist/ \;
+          ls -la dist/
 
       - name: Publish package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
