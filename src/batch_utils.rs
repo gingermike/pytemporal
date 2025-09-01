@@ -33,9 +33,23 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
         let scalar = ScalarValue::from_array(array, row_idx);
         match scalar {
             ScalarValue::String(s) => hasher_input.extend_from_slice(s.as_bytes()),
-            ScalarValue::Int32(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
+            ScalarValue::Int32(i) => {
+                // Normalize to 64-bit for consistency
+                let i64_val = i as i64;
+                hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+            },
             ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
-            ScalarValue::Float64(f) => hasher_input.extend_from_slice(&f.0.to_le_bytes()),
+            ScalarValue::Float64(f) => {
+                // Check if this is actually an integer value stored as float
+                if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f64 && f.0 <= i64::MAX as f64 {
+                    // This is an integer value - normalize to Int64 for consistency  
+                    let i64_val = f.0 as i64;
+                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                } else {
+                    // This is a true float value
+                    hasher_input.extend_from_slice(&f.0.to_le_bytes());
+                }
+            },
             ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
             ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
             ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
