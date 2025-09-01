@@ -1,4 +1,4 @@
-use arrow::array::{Array, ArrayRef, Date32Array, TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray, TimestampMillisecondArray, RecordBatch, StringArray, Int32Array, Int64Array, Float64Array, BooleanArray};
+use arrow::array::{Array, ArrayRef, Date32Array, Date64Array, TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray, TimestampMillisecondArray, RecordBatch, StringArray, Int8Array, Int16Array, Int32Array, Int64Array, Float32Array, Float64Array, BooleanArray, Decimal128Array};
 use arrow::datatypes::DataType;
 use chrono::{NaiveDate, NaiveDateTime};
 use ordered_float;
@@ -23,10 +23,19 @@ pub enum UpdateMode {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ScalarValue {
     String(String),
+    Int8(i8),
+    Int16(i16),
     Int32(i32),
     Int64(i64),
+    Float32(ordered_float::OrderedFloat<f32>),
     Float64(ordered_float::OrderedFloat<f64>),
     Date32(i32),
+    Date64(i64),
+    TimestampSecond(i64),
+    TimestampMillisecond(i64),
+    TimestampMicrosecond(i64),
+    TimestampNanosecond(i64),
+    Decimal128(i128),
     Boolean(bool),
     Null,
 }
@@ -34,13 +43,21 @@ pub enum ScalarValue {
 impl ScalarValue {
     pub fn from_array(array: &ArrayRef, idx: usize) -> Self {
         if array.is_null(idx) {
-            return ScalarValue::String("NULL".to_string());
+            return ScalarValue::Null;
         }
         
         match array.data_type() {
             DataType::Utf8 => {
                 let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
                 ScalarValue::String(arr.value(idx).to_string())
+            }
+            DataType::Int8 => {
+                let arr = array.as_any().downcast_ref::<Int8Array>().unwrap();
+                ScalarValue::Int8(arr.value(idx))
+            }
+            DataType::Int16 => {
+                let arr = array.as_any().downcast_ref::<Int16Array>().unwrap();
+                ScalarValue::Int16(arr.value(idx))
             }
             DataType::Int32 => {
                 let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -50,6 +67,10 @@ impl ScalarValue {
                 let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
                 ScalarValue::Int64(arr.value(idx))
             }
+            DataType::Float32 => {
+                let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
+                ScalarValue::Float32(ordered_float::OrderedFloat(arr.value(idx)))
+            }
             DataType::Float64 => {
                 let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
                 ScalarValue::Float64(ordered_float::OrderedFloat(arr.value(idx)))
@@ -58,26 +79,34 @@ impl ScalarValue {
                 let arr = array.as_any().downcast_ref::<Date32Array>().unwrap();
                 ScalarValue::Date32(arr.value(idx))
             }
+            DataType::Date64 => {
+                let arr = array.as_any().downcast_ref::<Date64Array>().unwrap();
+                ScalarValue::Date64(arr.value(idx))
+            }
             DataType::Timestamp(unit, _) => {
                 use arrow::datatypes::TimeUnit;
                 match unit {
                     TimeUnit::Second => {
                         let arr = array.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
-                        ScalarValue::Int64(arr.value(idx))
+                        ScalarValue::TimestampSecond(arr.value(idx))
                     }
                     TimeUnit::Millisecond => {
                         let arr = array.as_any().downcast_ref::<TimestampMillisecondArray>().unwrap();
-                        ScalarValue::Int64(arr.value(idx))
+                        ScalarValue::TimestampMillisecond(arr.value(idx))
                     }
                     TimeUnit::Microsecond => {
                         let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
-                        ScalarValue::Int64(arr.value(idx))
+                        ScalarValue::TimestampMicrosecond(arr.value(idx))
                     }
                     TimeUnit::Nanosecond => {
                         let arr = array.as_any().downcast_ref::<TimestampNanosecondArray>().unwrap();
-                        ScalarValue::Int64(arr.value(idx))
+                        ScalarValue::TimestampNanosecond(arr.value(idx))
                     }
                 }
+            }
+            DataType::Decimal128(_, _) => {
+                let arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                ScalarValue::Decimal128(arr.value(idx))
             }
             DataType::Boolean => {
                 let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();

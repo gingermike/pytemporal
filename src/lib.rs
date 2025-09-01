@@ -628,6 +628,127 @@ fn create_tombstone_batch(
                         }
                         columns.push(Arc::new(builder.finish()));
                     }
+                    arrow::datatypes::DataType::Date32 => {
+                        let mut builder = arrow::array::Date32Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Date32(d)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*d);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Date64 => {
+                        let mut builder = arrow::array::Date64Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Date64(d)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*d);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Float32 => {
+                        let mut builder = arrow::array::Float32Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Float32(f)) = record.id_values.get(data_value_index) {
+                                builder.append_value(f.0);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Int8 => {
+                        let mut builder = arrow::array::Int8Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Int8(i)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*i);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Int16 => {
+                        let mut builder = arrow::array::Int16Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Int16(i)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*i);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Timestamp(unit, timezone) => {
+                        use arrow::datatypes::TimeUnit;
+                        match unit {
+                            TimeUnit::Second => {
+                                let mut builder = arrow::array::TimestampSecondBuilder::new();
+                                for record in tombstone_records {
+                                    if let Some(crate::types::ScalarValue::TimestampSecond(t)) = record.id_values.get(data_value_index) {
+                                        builder.append_value(*t);
+                                    } else {
+                                        builder.append_null();
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                            TimeUnit::Millisecond => {
+                                let mut builder = arrow::array::TimestampMillisecondBuilder::new();
+                                for record in tombstone_records {
+                                    if let Some(crate::types::ScalarValue::TimestampMillisecond(t)) = record.id_values.get(data_value_index) {
+                                        builder.append_value(*t);
+                                    } else {
+                                        builder.append_null();
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                            TimeUnit::Microsecond => {
+                                let mut builder = arrow::array::TimestampMicrosecondBuilder::new();
+                                for record in tombstone_records {
+                                    if let Some(crate::types::ScalarValue::TimestampMicrosecond(t)) = record.id_values.get(data_value_index) {
+                                        builder.append_value(*t);
+                                    } else {
+                                        builder.append_null();
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                            TimeUnit::Nanosecond => {
+                                let mut builder = arrow::array::TimestampNanosecondBuilder::new();
+                                for record in tombstone_records {
+                                    if let Some(crate::types::ScalarValue::TimestampNanosecond(t)) = record.id_values.get(data_value_index) {
+                                        builder.append_value(*t);
+                                    } else {
+                                        builder.append_null();
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                        }
+                    }
+                    arrow::datatypes::DataType::Decimal128(precision, scale) => {
+                        let mut builder = arrow::array::Decimal128Builder::new();
+                        for record in tombstone_records {
+                            if let Some(crate::types::ScalarValue::Decimal128(d)) = record.id_values.get(data_value_index) {
+                                builder.append_value(*d);
+                            } else {
+                                builder.append_null();
+                            }
+                        }
+                        let array = builder.finish().with_precision_and_scale(*precision, *scale)
+                            .map_err(|e| format!("Failed to create Decimal128 array: {}", e))?;
+                        columns.push(Arc::new(array));
+                    }
                     arrow::datatypes::DataType::Null => {
                         // Create a null array with the right length
                         use arrow::array::NullArray;

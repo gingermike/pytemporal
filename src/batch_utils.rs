@@ -1,6 +1,9 @@
 use crate::types::*;
 use arrow::array::{Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, StringBuilder, StringArray};
-use arrow::array::{Int32Builder, Float64Builder, Date32Builder};
+use arrow::array::{Int8Builder, Int16Builder, Int32Builder, Float32Builder, Float64Builder, Date32Builder, Date64Builder, BooleanBuilder, Decimal128Builder};
+use arrow::array::{Int8Array, Int16Array, Float32Array, Date32Array, Date64Array, BooleanArray, Decimal128Array};
+use arrow::array::{TimestampSecondBuilder, TimestampMillisecondBuilder, TimestampMicrosecondBuilder, TimestampNanosecondBuilder};
+use arrow::array::{TimestampSecondArray, TimestampMillisecondArray, TimestampNanosecondArray};
 use arrow::datatypes::{Schema, Field, DataType};
 use std::sync::Arc;
 use chrono::NaiveDateTime;
@@ -33,12 +36,34 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
         let scalar = ScalarValue::from_array(array, row_idx);
         match scalar {
             ScalarValue::String(s) => hasher_input.extend_from_slice(s.as_bytes()),
+            ScalarValue::Int8(i) => {
+                // Normalize to 64-bit for consistency
+                let i64_val = i as i64;
+                hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+            },
+            ScalarValue::Int16(i) => {
+                // Normalize to 64-bit for consistency
+                let i64_val = i as i64;
+                hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+            },
             ScalarValue::Int32(i) => {
                 // Normalize to 64-bit for consistency
                 let i64_val = i as i64;
                 hasher_input.extend_from_slice(&i64_val.to_le_bytes());
             },
             ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
+            ScalarValue::Float32(f) => {
+                // Check if this is actually an integer value stored as float
+                if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f32 && f.0 <= i64::MAX as f32 {
+                    // This is an integer value - normalize to Int64 for consistency  
+                    let i64_val = f.0 as i64;
+                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                } else {
+                    // This is a true float value - promote to f64 for consistency
+                    let f64_val = f.0 as f64;
+                    hasher_input.extend_from_slice(&f64_val.to_le_bytes());
+                }
+            },
             ScalarValue::Float64(f) => {
                 // Check if this is actually an integer value stored as float
                 if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f64 && f.0 <= i64::MAX as f64 {
@@ -51,6 +76,12 @@ pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[
                 }
             },
             ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
+            ScalarValue::Date64(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
+            ScalarValue::TimestampSecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+            ScalarValue::TimestampMillisecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+            ScalarValue::TimestampMicrosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+            ScalarValue::TimestampNanosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+            ScalarValue::Decimal128(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
             ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
             ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
         }
@@ -288,9 +319,48 @@ pub fn create_record_batch_from_records(
                         }
                         columns.push(Arc::new(builder.finish()));
                     }
+                    arrow::datatypes::DataType::Int8 => {
+                        let int8_array = orig_array.as_any()
+                            .downcast_ref::<Int8Array>().unwrap();
+                        let mut builder = Int8Builder::new();
+                        for &source_row in source_rows {
+                            if int8_array.is_null(source_row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(int8_array.value(source_row));
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Int16 => {
+                        let int16_array = orig_array.as_any()
+                            .downcast_ref::<Int16Array>().unwrap();
+                        let mut builder = Int16Builder::new();
+                        for &source_row in source_rows {
+                            if int16_array.is_null(source_row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(int16_array.value(source_row));
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Float32 => {
+                        let float32_array = orig_array.as_any()
+                            .downcast_ref::<Float32Array>().unwrap();
+                        let mut builder = Float32Builder::new();
+                        for &source_row in source_rows {
+                            if float32_array.is_null(source_row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(float32_array.value(source_row));
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
                     arrow::datatypes::DataType::Date32 => {
                         let date32_array = orig_array.as_any()
-                            .downcast_ref::<arrow::array::Date32Array>().unwrap();
+                            .downcast_ref::<Date32Array>().unwrap();
                         let mut builder = Date32Builder::new();
                         for &source_row in source_rows {
                             if date32_array.is_null(source_row) {
@@ -300,6 +370,108 @@ pub fn create_record_batch_from_records(
                             }
                         }
                         columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Date64 => {
+                        let date64_array = orig_array.as_any()
+                            .downcast_ref::<Date64Array>().unwrap();
+                        let mut builder = Date64Builder::new();
+                        for &source_row in source_rows {
+                            if date64_array.is_null(source_row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(date64_array.value(source_row));
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Boolean => {
+                        let bool_array = orig_array.as_any()
+                            .downcast_ref::<BooleanArray>().unwrap();
+                        let mut builder = BooleanBuilder::new();
+                        for &source_row in source_rows {
+                            if bool_array.is_null(source_row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(bool_array.value(source_row));
+                            }
+                        }
+                        columns.push(Arc::new(builder.finish()));
+                    }
+                    arrow::datatypes::DataType::Timestamp(unit, timezone) => {
+                        use arrow::datatypes::TimeUnit;
+                        match unit {
+                            TimeUnit::Second => {
+                                let ts_array = orig_array.as_any()
+                                    .downcast_ref::<TimestampSecondArray>().unwrap();
+                                let mut builder = TimestampSecondBuilder::new();
+                                for &source_row in source_rows {
+                                    if ts_array.is_null(source_row) {
+                                        builder.append_null();
+                                    } else {
+                                        builder.append_value(ts_array.value(source_row));
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                            TimeUnit::Millisecond => {
+                                let ts_array = orig_array.as_any()
+                                    .downcast_ref::<TimestampMillisecondArray>().unwrap();
+                                let mut builder = TimestampMillisecondBuilder::new();
+                                for &source_row in source_rows {
+                                    if ts_array.is_null(source_row) {
+                                        builder.append_null();
+                                    } else {
+                                        builder.append_value(ts_array.value(source_row));
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                            TimeUnit::Microsecond => {
+                                let ts_array = orig_array.as_any()
+                                    .downcast_ref::<TimestampMicrosecondArray>().unwrap();
+                                let mut builder = TimestampMicrosecondBuilder::new();
+                                for &source_row in source_rows {
+                                    if ts_array.is_null(source_row) {
+                                        builder.append_null();
+                                    } else {
+                                        builder.append_value(ts_array.value(source_row));
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                            TimeUnit::Nanosecond => {
+                                let ts_array = orig_array.as_any()
+                                    .downcast_ref::<TimestampNanosecondArray>().unwrap();
+                                let mut builder = TimestampNanosecondBuilder::new();
+                                for &source_row in source_rows {
+                                    if ts_array.is_null(source_row) {
+                                        builder.append_null();
+                                    } else {
+                                        builder.append_value(ts_array.value(source_row));
+                                    }
+                                }
+                                let array = builder.finish().with_timezone_opt(timezone.clone());
+                                columns.push(Arc::new(array));
+                            }
+                        }
+                    }
+                    arrow::datatypes::DataType::Decimal128(precision, scale) => {
+                        let decimal_array = orig_array.as_any()
+                            .downcast_ref::<Decimal128Array>().unwrap();
+                        let mut builder = Decimal128Builder::new();
+                        for &source_row in source_rows {
+                            if decimal_array.is_null(source_row) {
+                                builder.append_null();
+                            } else {
+                                builder.append_value(decimal_array.value(source_row));
+                            }
+                        }
+                        let array = builder.finish().with_precision_and_scale(*precision, *scale)
+                            .map_err(|e| format!("Failed to create Decimal128 array: {}", e))?;
+                        columns.push(Arc::new(array));
                     }
                     _ => {
                         // Fallback to slice method for unsupported types
@@ -345,10 +517,52 @@ pub fn hash_values_batch(
             let scalar = ScalarValue::from_array(array, row_idx);
             match scalar {
                 ScalarValue::String(s) => hasher_input.extend_from_slice(s.as_bytes()),
-                ScalarValue::Int32(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
+                ScalarValue::Int8(i) => {
+                    // Normalize to 64-bit for consistency
+                    let i64_val = i as i64;
+                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                },
+                ScalarValue::Int16(i) => {
+                    // Normalize to 64-bit for consistency
+                    let i64_val = i as i64;
+                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                },
+                ScalarValue::Int32(i) => {
+                    // Normalize to 64-bit for consistency
+                    let i64_val = i as i64;
+                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                },
                 ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
-                ScalarValue::Float64(f) => hasher_input.extend_from_slice(&f.0.to_le_bytes()),
+                ScalarValue::Float32(f) => {
+                    // Check if this is actually an integer value stored as float
+                    if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f32 && f.0 <= i64::MAX as f32 {
+                        // This is an integer value - normalize to Int64 for consistency  
+                        let i64_val = f.0 as i64;
+                        hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                    } else {
+                        // This is a true float value - promote to f64 for consistency
+                        let f64_val = f.0 as f64;
+                        hasher_input.extend_from_slice(&f64_val.to_le_bytes());
+                    }
+                },
+                ScalarValue::Float64(f) => {
+                    // Check if this is actually an integer value stored as float
+                    if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f64 && f.0 <= i64::MAX as f64 {
+                        // This is an integer value - normalize to Int64 for consistency  
+                        let i64_val = f.0 as i64;
+                        hasher_input.extend_from_slice(&i64_val.to_le_bytes());
+                    } else {
+                        // This is a true float value
+                        hasher_input.extend_from_slice(&f.0.to_le_bytes());
+                    }
+                },
                 ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
+                ScalarValue::Date64(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
+                ScalarValue::TimestampSecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+                ScalarValue::TimestampMillisecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+                ScalarValue::TimestampMicrosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+                ScalarValue::TimestampNanosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
+                ScalarValue::Decimal128(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
                 ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
                 ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
             }
