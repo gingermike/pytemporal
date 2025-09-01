@@ -36,4 +36,5 @@ dev = [
     "black",
     "mypy",
     "ruff",
+    "maturin>=1.9.4",
 ]
