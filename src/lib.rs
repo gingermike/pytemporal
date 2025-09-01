@@ -482,7 +482,6 @@ fn create_tombstone_batch(
     }
     
     let schema = updates.schema();
-    let num_records = tombstone_records.len();
     let mut columns: Vec<arrow::array::ArrayRef> = Vec::with_capacity(schema.fields().len());
     
     // Epoch for timestamp conversion

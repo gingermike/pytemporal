@@ -7,7 +7,7 @@ name = "pytemporal"
 version = "0.1.0"
 description = "High-performance bitemporal timeseries update processor"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
     "pyarrow>=14.0.0",
     "pandas>=2.0.0",

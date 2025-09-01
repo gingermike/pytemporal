@@ -58,6 +58,7 @@ jobs:
     strategy:
       matrix:
         target: [x86_64]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
         
     steps:
     - uses: actions/checkout@v4
@@ -92,10 +93,10 @@ jobs:
         echo "Updated pyproject.toml:"
         grep "^version" pyproject.toml
     
-    - name: Set up Python
+    - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python-version }}
         
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -113,11 +114,13 @@ jobs:
       
     - name: Build wheel
       run: |
-        # Find the Python interpreter path
+        # Use the specific Python version set up by actions/setup-python
         PYTHON_PATH=$(which python3)
-        echo "Using Python interpreter: $PYTHON_PATH"
+        echo "Using Python interpreter: $PYTHON_PATH (${{ matrix.python-version }})"
+        python3 --version
         
-        uv run maturin build --release --out dist --find-interpreter
+        # Build wheel for this specific Python version
+        uv run maturin build --release --out dist --interpreter $PYTHON_PATH
         
     - name: List built wheels
       run: ls -la dist/
@@ -125,7 +128,7 @@ jobs:
     - name: Upload wheel as artifact
       uses: actions/upload-artifact@v3
       with:
-        name: wheels-linux-${{ matrix.target }}
+        name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
         
   publish-to-gitea:
@@ -181,8 +184,7 @@ jobs:
         # Release ${{ steps.version.outputs.VERSION }}
         
         ## Linux Wheels Built
-        - x86_64 (Intel/AMD 64-bit)
-        - aarch64 (ARM 64-bit)
+        - x86_64 (Intel/AMD 64-bit) for Python 3.9, 3.10, 3.11, 3.12
         
         ## Installation
         \`\`\`bash
