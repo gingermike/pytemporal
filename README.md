@@ -360,6 +360,44 @@ cargo bench
 
 ## Development
 
+### Requirements
+- Rust (latest stable)
+- Python 3.8+ with development headers
+- uv for Python dependency management
+
+### Python Version Compatibility
+This project uses PyO3 v0.21.2 which officially supports Python up to 3.12. If you're using Python 3.13+:
+
+**For Rust tests:**
+```bash
+export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+cargo test
+```
+
+**For Python bindings (recommended):**
+```bash
+uv run maturin develop  # Uses venv Python 3.12 automatically
+```
+
+### Setup
+```bash
+# Install Rust dependencies and run tests
+export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1  # If using Python 3.13+
+cargo test
+
+# Build Python extension (development mode)
+uv run maturin develop
+
+# Run Python tests  
+uv run python -m pytest tests/test_bitemporal_manual.py -v
+```
+
+### Permanent Fix for Python 3.13+
+Add to your shell profile (~/.bashrc or ~/.zshrc):
+```bash
+export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+```
+
 ### Project Structure
 
 **Modular Architecture** (274 lines total in main file, down from 1,085):
