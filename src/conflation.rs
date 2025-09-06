@@ -1,9 +1,58 @@
 use crate::types::*;
 use crate::batch_utils::extract_date_as_datetime;
-use arrow::array::{RecordBatch, TimestampMicrosecondArray, StringArray, ArrayRef};
-use arrow::datatypes::DataType;
+use arrow::array::{RecordBatch, TimestampMicrosecondArray, TimestampNanosecondArray, StringArray, ArrayRef};
+use arrow::datatypes::{DataType, Schema, Field};
 use std::sync::Arc;
 use chrono::NaiveDateTime;
+
+/// Extract timestamp from any timestamp array type
+fn extract_timestamp_as_datetime(array: &dyn arrow::array::Array, idx: usize) -> Result<NaiveDateTime, String> {
+    if let Some(arr) = array.as_any().downcast_ref::<TimestampMicrosecondArray>() {
+        Ok(extract_date_as_datetime(arr, idx))
+    } else if let Some(arr) = array.as_any().downcast_ref::<TimestampNanosecondArray>() {
+        let value = arr.value(idx);
+        let seconds = value / 1_000_000_000;
+        let nanos = (value % 1_000_000_000) as u32;
+        Ok(chrono::DateTime::from_timestamp(seconds, nanos)
+            .ok_or_else(|| "Failed to convert nanosecond timestamp".to_string())?
+            .naive_utc())
+    } else {
+        Err(format!("Unsupported timestamp array type"))
+    }
+}
+
+/// Check if two schemas are compatible for concatenation (ignoring metadata)
+fn schemas_compatible(schema1: &Schema, schema2: &Schema) -> bool {
+    if schema1.fields().len() != schema2.fields().len() {
+        return false;
+    }
+    
+    for (field1, field2) in schema1.fields().iter().zip(schema2.fields().iter()) {
+        if field1.name() != field2.name() 
+            || field1.data_type() != field2.data_type() 
+            || field1.is_nullable() != field2.is_nullable() {
+            return false;
+        }
+    }
+    
+    true
+}
+
+/// Create a clean schema without metadata for consolidation
+fn create_clean_schema(original_schema: &Schema) -> Schema {
+    let clean_fields: Vec<Field> = original_schema.fields()
+        .iter()
+        .map(|field| {
+            Field::new(
+                field.name(),
+                field.data_type().clone(),
+                field.is_nullable()
+            )
+        })
+        .collect();
+    
+    Schema::new(clean_fields)
+}
 
 
 pub fn simple_conflate_batches(mut batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, String> {
@@ -13,16 +62,12 @@ pub fn simple_conflate_batches(mut batches: Vec<RecordBatch>) -> Result<Vec<Reco
 
     // Sort batches by effective_from for processing
     batches.sort_by(|a, b| {
-        let a_eff_from = extract_date_as_datetime(
-            a.column_by_name("effective_from").unwrap()
-                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
-            0
-        );
-        let b_eff_from = extract_date_as_datetime(
-            b.column_by_name("effective_from").unwrap()
-                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
-            0
-        );
+        let a_eff_from = extract_timestamp_as_datetime(
+            a.column_by_name("effective_from").unwrap(), 0
+        ).unwrap();
+        let b_eff_from = extract_timestamp_as_datetime(
+            b.column_by_name("effective_from").unwrap(), 0
+        ).unwrap();
         a_eff_from.cmp(&b_eff_from)
     });
 
@@ -34,11 +79,9 @@ pub fn simple_conflate_batches(mut batches: Vec<RecordBatch>) -> Result<Vec<Reco
         // Check if we can merge current_batch with next_batch
         if can_merge_batches(&current_batch, &next_batch)? {
             // Merge by extending current_batch's effective_to
-            let next_eff_to = extract_date_as_datetime(
-                next_batch.column_by_name("effective_to").unwrap()
-                    .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
-                0
-            );
+            let next_eff_to = extract_timestamp_as_datetime(
+                next_batch.column_by_name("effective_to").unwrap(), 0
+            )?;
             current_batch = extend_batch_to_date(current_batch, next_eff_to)?;
         } else {
             // Can't merge, add current to result and make next the new current
@@ -76,16 +119,12 @@ fn can_merge_batches(batch1: &RecordBatch, batch2: &RecordBatch) -> Result<bool,
     }
 
     // Check if they are adjacent
-    let batch1_eff_to = extract_date_as_datetime(
-        batch1.column_by_name("effective_to").unwrap()
-            .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
-        0
-    );
-    let batch2_eff_from = extract_date_as_datetime(
-        batch2.column_by_name("effective_from").unwrap()
-            .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap(),
-        0
-    );
+    let batch1_eff_to = extract_timestamp_as_datetime(
+        batch1.column_by_name("effective_to").unwrap(), 0
+    )?;
+    let batch2_eff_from = extract_timestamp_as_datetime(
+        batch2.column_by_name("effective_from").unwrap(), 0
+    )?;
 
     Ok(batch1_eff_to == batch2_eff_from)
 }
@@ -127,15 +166,13 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
     
     for batch in batches {
         if batch.num_rows() == 1 {
-            let eff_from_array = batch.column_by_name("effective_from").unwrap()
-                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
-            let eff_to_array = batch.column_by_name("effective_to").unwrap()
-                .as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+            // Extract timestamps handling both microsecond and nanosecond precision
+            let eff_from = extract_timestamp_as_datetime(batch.column_by_name("effective_from").unwrap(), 0)?;
+            let eff_to = extract_timestamp_as_datetime(batch.column_by_name("effective_to").unwrap(), 0)?;
+            
             let hash_array = batch.column_by_name("value_hash").unwrap()
                 .as_any().downcast_ref::<StringArray>().unwrap();
             
-            let eff_from = extract_date_as_datetime(eff_from_array, 0);
-            let eff_to = extract_date_as_datetime(eff_to_array, 0);
             let hash = hash_array.value(0).to_string();
             
             records.push((eff_from, eff_to, hash, batch));
@@ -173,9 +210,14 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
 /// Consolidate multiple RecordBatches into fewer large batches to reduce Python conversion overhead
 /// This combines smaller batches from different ID groups into larger consolidated batches
 pub fn consolidate_final_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, String> {
+    
     if batches.is_empty() {
         return Ok(Vec::new());
     }
+    
+    // Log batch size statistics
+    let small_batches = batches.iter().filter(|b| b.num_rows() <= 1000).count();
+    let _large_batches = batches.len() - small_batches;
     
     // If we only have one batch, or all batches are already large, return as-is
     if batches.len() == 1 || batches.iter().all(|b| b.num_rows() > 1000) {
@@ -185,16 +227,21 @@ pub fn consolidate_final_batches(batches: Vec<RecordBatch>) -> Result<Vec<Record
     // We want to group batches by schema to ensure compatibility
     let first_schema = batches[0].schema();
     
-    // Check if all batches have the same schema - if not, return original (safer)
-    for batch in &batches {
-        if batch.schema() != first_schema {
-            return Ok(batches); // Mixed schemas, return original to be safe
+    // Check if all batches have compatible schemas (ignore metadata differences)
+    for (i, batch) in batches.iter().enumerate() {
+        // Compare core schema (fields and types) without metadata
+        if !schemas_compatible(&first_schema, &batch.schema()) {
+            return Ok(batches); // Truly incompatible schemas, return original to be safe
+        }
+        if i < 5 {  // Log first few schemas for debugging
         }
     }
     
-    // All batches have the same schema, so we can consolidate them
-    // Convert all batches into a single large table, then split into reasonable chunks
-    let table = arrow::compute::concat_batches(&first_schema, &batches)
+    // All batches have compatible schemas, so we can consolidate them
+    // Create a clean schema without metadata to avoid conflicts
+    let clean_schema = create_clean_schema(&first_schema);
+    
+    let table = arrow::compute::concat_batches(&Arc::new(clean_schema), &batches)
         .map_err(|e| format!("Failed to consolidate batches: {}", e))?;
     
     // Split the consolidated data into reasonably-sized batches (target ~10k rows per batch)

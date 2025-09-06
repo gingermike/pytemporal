@@ -24,73 +24,6 @@ pub fn extract_date_as_datetime(array: &TimestampMicrosecondArray, idx: usize) -
     extract_timestamp(array, idx)
 }
 
-pub fn hash_values(record_batch: &RecordBatch, row_idx: usize, value_columns: &[String]) -> String {
-    use sha2::{Sha256, Digest};
-    
-    let mut hasher_input = Vec::new();
-    
-    for col_name in value_columns {
-        let col_idx = record_batch.schema().index_of(col_name).unwrap();
-        let array = record_batch.column(col_idx);
-        
-        let scalar = ScalarValue::from_array(array, row_idx);
-        match scalar {
-            ScalarValue::String(s) => hasher_input.extend_from_slice(s.as_bytes()),
-            ScalarValue::Int8(i) => {
-                // Normalize to 64-bit for consistency
-                let i64_val = i as i64;
-                hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-            },
-            ScalarValue::Int16(i) => {
-                // Normalize to 64-bit for consistency
-                let i64_val = i as i64;
-                hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-            },
-            ScalarValue::Int32(i) => {
-                // Normalize to 64-bit for consistency
-                let i64_val = i as i64;
-                hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-            },
-            ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
-            ScalarValue::Float32(f) => {
-                // Check if this is actually an integer value stored as float
-                if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f32 && f.0 <= i64::MAX as f32 {
-                    // This is an integer value - normalize to Int64 for consistency  
-                    let i64_val = f.0 as i64;
-                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                } else {
-                    // This is a true float value - promote to f64 for consistency
-                    let f64_val = f.0 as f64;
-                    hasher_input.extend_from_slice(&f64_val.to_le_bytes());
-                }
-            },
-            ScalarValue::Float64(f) => {
-                // Check if this is actually an integer value stored as float
-                if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f64 && f.0 <= i64::MAX as f64 {
-                    // This is an integer value - normalize to Int64 for consistency  
-                    let i64_val = f.0 as i64;
-                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                } else {
-                    // This is a true float value
-                    hasher_input.extend_from_slice(&f.0.to_le_bytes());
-                }
-            },
-            ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
-            ScalarValue::Date64(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
-            ScalarValue::TimestampSecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-            ScalarValue::TimestampMillisecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-            ScalarValue::TimestampMicrosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-            ScalarValue::TimestampNanosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-            ScalarValue::Decimal128(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
-            ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
-            ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
-        }
-    }
-    
-    let mut hasher = Sha256::new();
-    hasher.update(&hasher_input);
-    format!("{:x}", hasher.finalize())
-}
 
 // Helper function to create a timestamp array from a NaiveDateTime with timezone support
 fn create_timestamp_array(datetime: NaiveDateTime, timezone: Option<String>) -> ArrayRef {
@@ -570,7 +503,8 @@ pub fn hash_values_batch(
         
         let mut hasher = Sha256::new();
         hasher.update(&hasher_input);
-        hashes.push(format!("{:x}", hasher.finalize()));
+        let hash_result = format!("{:x}", hasher.finalize());
+        hashes.push(hash_result);
     }
     
     hashes
@@ -596,18 +530,28 @@ pub fn create_expired_records_batch(
         let column_name = field.name();
         
         if column_name == "as_of_to" {
-            // Set as_of_to to the expiry timestamp for all records
-            let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                tz.as_ref().map(|t| t.to_string())
-            } else { None };
-            
-            let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
-            let values: Vec<Option<i64>> = expire_indices.iter()
-                .map(|_| Some(microseconds))
-                .collect();
-            
-            let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
-            columns.push(Arc::new(array));
+            // Set as_of_to to the expiry timestamp for all records, matching the field's precision
+            match field.data_type() {
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, tz) => {
+                    let timezone_str = tz.as_ref().map(|t| t.to_string());
+                    let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
+                    let values: Vec<Option<i64>> = expire_indices.iter()
+                        .map(|_| Some(microseconds))
+                        .collect();
+                    let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                    columns.push(Arc::new(array));
+                }
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, tz) => {
+                    let timezone_str = tz.as_ref().map(|t| t.to_string());
+                    let nanoseconds = (expiry_timestamp - EPOCH).num_nanoseconds().unwrap();
+                    let values: Vec<Option<i64>> = expire_indices.iter()
+                        .map(|_| Some(nanoseconds))
+                        .collect();
+                    let array = TimestampNanosecondArray::from(values).with_timezone_opt(timezone_str);
+                    columns.push(Arc::new(array));
+                }
+                _ => return Err(format!("Unexpected data type for as_of_to: {:?}", field.data_type()))
+            }
         } else {
             // Copy data from original records at the specified indices
             let orig_array = current_state.column_by_name(column_name).unwrap();
@@ -808,14 +752,29 @@ pub fn add_hash_column(
     // Create the hash column
     let hash_array = Arc::new(StringArray::from(hash_values_string));
     
-    // Create new schema with added hash column
-    let mut new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
-    new_fields.push(Arc::new(Field::new("value_hash", DataType::Utf8, false)));
-    let new_schema = Arc::new(Schema::new(new_fields));
+    // Check if value_hash column already exists
+    let hash_column_index = record_batch.schema().index_of("value_hash");
     
-    // Create new columns vector with all original columns plus hash column
-    let mut new_columns: Vec<ArrayRef> = record_batch.columns().to_vec();
-    new_columns.push(hash_array);
+    let (new_schema, new_columns) = if let Ok(hash_idx) = hash_column_index {
+        // Replace existing value_hash column
+        let new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
+        let new_schema = Arc::new(Schema::new(new_fields));
+        
+        let mut new_columns: Vec<ArrayRef> = record_batch.columns().to_vec();
+        new_columns[hash_idx] = hash_array; // Replace existing column
+        
+        (new_schema, new_columns)
+    } else {
+        // Add new value_hash column
+        let mut new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
+        new_fields.push(Arc::new(Field::new("value_hash", DataType::Utf8, false)));
+        let new_schema = Arc::new(Schema::new(new_fields));
+        
+        let mut new_columns: Vec<ArrayRef> = record_batch.columns().to_vec();
+        new_columns.push(hash_array);
+        
+        (new_schema, new_columns)
+    };
     
     // Create the new RecordBatch
     RecordBatch::try_new(new_schema, new_columns)
