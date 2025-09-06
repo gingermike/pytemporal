@@ -9,6 +9,7 @@ pyo3 = "0.21"
 pyo3-arrow = "0.3"
 chrono = "0.4"
 sha2 = "0.10"
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
 rayon = "1.8"
 ordered-float = "4.2"
 

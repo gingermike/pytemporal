@@ -174,6 +174,7 @@ pub fn process_id_timeline(
     Ok((expire_indices, insert_batches))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_segment(
     from_date: chrono::NaiveDateTime,
     to_date: chrono::NaiveDateTime,
@@ -184,7 +185,7 @@ pub fn emit_segment(
     id_columns: &[String],
     value_columns: &[String],
     _system_date: NaiveDate,
-    _expire_indices: &mut Vec<usize>,
+    _expire_indices: &mut [usize],
     insert_batches: &mut Vec<RecordBatch>,
     update_as_of_from: Option<chrono::NaiveDateTime>,
 ) -> Result<(), String> {
@@ -212,9 +213,9 @@ pub fn emit_segment(
 
     // Create the segment record
     // When re-emitting current state due to overlapping updates, use the update's as_of_from
-    let as_of_from = if use_current_batch && update_as_of_from.is_some() {
+    let as_of_from = if let (true, Some(timestamp)) = (use_current_batch, update_as_of_from) {
         // Current state being re-emitted due to overlapping update - use update's timestamp
-        update_as_of_from.unwrap()
+        timestamp
     } else {
         // Normal case - use the record's own timestamp
         record_to_emit.as_of_from

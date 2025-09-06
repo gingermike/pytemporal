@@ -1,10 +1,10 @@
 use crate::types::*;
-use arrow::array::{Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, StringBuilder, StringArray};
+use arrow::array::{Array, ArrayRef, RecordBatch, TimestampMicrosecondArray, StringBuilder};
 use arrow::array::{Int8Builder, Int16Builder, Int32Builder, Float32Builder, Float64Builder, Date32Builder, Date64Builder, BooleanBuilder, Decimal128Builder};
 use arrow::array::{Int8Array, Int16Array, Float32Array, Date32Array, Date64Array, BooleanArray, Decimal128Array};
 use arrow::array::{TimestampSecondBuilder, TimestampMillisecondBuilder, TimestampMicrosecondBuilder, TimestampNanosecondBuilder};
 use arrow::array::{TimestampSecondArray, TimestampMillisecondArray, TimestampNanosecondArray};
-use arrow::datatypes::{Schema, Field, DataType};
+use arrow::datatypes::{DataType};
 use std::sync::Arc;
 use chrono::NaiveDateTime;
 
@@ -427,88 +427,7 @@ pub fn create_record_batch_from_records(
         .map_err(|e| e.to_string())
 }
 
-/// Optimized batch hash computation
-pub fn hash_values_batch(
-    record_batch: &RecordBatch, 
-    row_indices: &[usize], 
-    value_columns: &[String]
-) -> Vec<String> {
-    use sha2::{Sha256, Digest};
-    
-    let mut hashes = Vec::with_capacity(row_indices.len());
-    
-    // Pre-compute column indices to avoid repeated lookups
-    let col_indices: Vec<usize> = value_columns.iter()
-        .map(|col_name| record_batch.schema().index_of(col_name).unwrap())
-        .collect();
-    
-    for &row_idx in row_indices {
-        let mut hasher_input = Vec::new();
-        
-        for &col_idx in &col_indices {
-            let array = record_batch.column(col_idx);
-            let scalar = ScalarValue::from_array(array, row_idx);
-            match scalar {
-                ScalarValue::String(s) => hasher_input.extend_from_slice(s.as_bytes()),
-                ScalarValue::Int8(i) => {
-                    // Normalize to 64-bit for consistency
-                    let i64_val = i as i64;
-                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                },
-                ScalarValue::Int16(i) => {
-                    // Normalize to 64-bit for consistency
-                    let i64_val = i as i64;
-                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                },
-                ScalarValue::Int32(i) => {
-                    // Normalize to 64-bit for consistency
-                    let i64_val = i as i64;
-                    hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                },
-                ScalarValue::Int64(i) => hasher_input.extend_from_slice(&i.to_le_bytes()),
-                ScalarValue::Float32(f) => {
-                    // Check if this is actually an integer value stored as float
-                    if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f32 && f.0 <= i64::MAX as f32 {
-                        // This is an integer value - normalize to Int64 for consistency  
-                        let i64_val = f.0 as i64;
-                        hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                    } else {
-                        // This is a true float value - promote to f64 for consistency
-                        let f64_val = f.0 as f64;
-                        hasher_input.extend_from_slice(&f64_val.to_le_bytes());
-                    }
-                },
-                ScalarValue::Float64(f) => {
-                    // Check if this is actually an integer value stored as float
-                    if f.0.fract() == 0.0 && f.0.is_finite() && f.0 >= i64::MIN as f64 && f.0 <= i64::MAX as f64 {
-                        // This is an integer value - normalize to Int64 for consistency  
-                        let i64_val = f.0 as i64;
-                        hasher_input.extend_from_slice(&i64_val.to_le_bytes());
-                    } else {
-                        // This is a true float value
-                        hasher_input.extend_from_slice(&f.0.to_le_bytes());
-                    }
-                },
-                ScalarValue::Date32(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
-                ScalarValue::Date64(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
-                ScalarValue::TimestampSecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-                ScalarValue::TimestampMillisecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-                ScalarValue::TimestampMicrosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-                ScalarValue::TimestampNanosecond(t) => hasher_input.extend_from_slice(&t.to_le_bytes()),
-                ScalarValue::Decimal128(d) => hasher_input.extend_from_slice(&d.to_le_bytes()),
-                ScalarValue::Boolean(b) => hasher_input.push(if b { 1u8 } else { 0u8 }),
-                ScalarValue::Null => hasher_input.extend_from_slice(b"NULL"), // Use consistent NULL representation
-            }
-        }
-        
-        let mut hasher = Sha256::new();
-        hasher.update(&hasher_input);
-        let hash_result = format!("{:x}", hasher.finalize());
-        hashes.push(hash_result);
-    }
-    
-    hashes
-}
+// Old ScalarValue-based implementations removed - now using fast Arrow-direct hashing
 
 /// Create a RecordBatch of expired records with updated as_of_to timestamp
 pub fn create_expired_records_batch(
@@ -727,56 +646,4 @@ pub fn create_expired_records_batch(
         .map_err(|e| format!("Failed to create expired records batch: {}", e))
 }
 
-/// Add a hash column to a RecordBatch using the same hash function as the internal algorithm
-/// This ensures complete consistency with the bitemporal processing logic
-pub fn add_hash_column(
-    record_batch: &RecordBatch,
-    value_columns: &[String]
-) -> Result<RecordBatch, String> {
-    let num_rows = record_batch.num_rows();
-    if num_rows == 0 {
-        return Err("Cannot add hash column to empty RecordBatch".to_string());
-    }
-    
-    // Validate that all value columns exist
-    for col_name in value_columns {
-        if record_batch.schema().index_of(col_name).is_err() {
-            return Err(format!("Column '{}' not found in RecordBatch", col_name));
-        }
-    }
-    
-    // Use the existing hash_values_batch function to compute hashes for all rows
-    let row_indices: Vec<usize> = (0..num_rows).collect();
-    let hash_values_string = hash_values_batch(record_batch, &row_indices, value_columns);
-    
-    // Create the hash column
-    let hash_array = Arc::new(StringArray::from(hash_values_string));
-    
-    // Check if value_hash column already exists
-    let hash_column_index = record_batch.schema().index_of("value_hash");
-    
-    let (new_schema, new_columns) = if let Ok(hash_idx) = hash_column_index {
-        // Replace existing value_hash column
-        let new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
-        let new_schema = Arc::new(Schema::new(new_fields));
-        
-        let mut new_columns: Vec<ArrayRef> = record_batch.columns().to_vec();
-        new_columns[hash_idx] = hash_array; // Replace existing column
-        
-        (new_schema, new_columns)
-    } else {
-        // Add new value_hash column
-        let mut new_fields: Vec<Arc<Field>> = record_batch.schema().fields().iter().cloned().collect();
-        new_fields.push(Arc::new(Field::new("value_hash", DataType::Utf8, false)));
-        let new_schema = Arc::new(Schema::new(new_fields));
-        
-        let mut new_columns: Vec<ArrayRef> = record_batch.columns().to_vec();
-        new_columns.push(hash_array);
-        
-        (new_schema, new_columns)
-    };
-    
-    // Create the new RecordBatch
-    RecordBatch::try_new(new_schema, new_columns)
-        .map_err(|e| format!("Failed to create RecordBatch with hash column: {}", e))
-}
+// Old add_hash_column implementations removed - now using fast Arrow-direct hashing from arrow_hash.rs

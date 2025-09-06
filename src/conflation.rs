@@ -17,7 +17,7 @@ fn extract_timestamp_as_datetime(array: &dyn arrow::array::Array, idx: usize) ->
             .ok_or_else(|| "Failed to convert nanosecond timestamp".to_string())?
             .naive_utc())
     } else {
-        Err(format!("Unsupported timestamp array type"))
+        Err("Unsupported timestamp array type".to_string())
     }
 }
 

@@ -1,7 +1,7 @@
 use arrow::array::{Array, ArrayRef, Date32Array, Date64Array, TimestampMicrosecondArray, TimestampNanosecondArray, TimestampSecondArray, TimestampMillisecondArray, RecordBatch, StringArray, Int8Array, Int16Array, Int32Array, Int64Array, Float32Array, Float64Array, BooleanArray, Decimal128Array};
 use arrow::datatypes::DataType;
 use chrono::{NaiveDate, NaiveDateTime};
-use ordered_float;
+// ordered_float imported as part of ScalarValue but not used directly
 
 #[derive(Debug, Clone)]
 pub struct BitemporalRecord {
@@ -172,6 +172,12 @@ pub struct BatchCollector {
     pub update_records: Vec<BitemporalRecord>,  
     /// Source row indices for update_records
     pub update_source_rows: Vec<usize>,
+}
+
+impl Default for BatchCollector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BatchCollector {

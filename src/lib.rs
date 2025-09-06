@@ -11,11 +11,35 @@ mod overlap;
 mod timeline;
 mod conflation;
 mod batch_utils;
+mod arrow_hash;
+
+/// Hash algorithm options for value hash computation
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
+pub enum HashAlgorithm {
+    #[default]
+    XxHash,  // Default - fast, high quality
+    Sha256,  // Legacy compatibility
+}
+
+impl HashAlgorithm {
+    fn from_str(s: &str) -> Result<HashAlgorithm, String> {
+        match s.to_lowercase().as_str() {
+            "xxhash" | "xx" => Ok(HashAlgorithm::XxHash),
+            "sha256" | "sha" => Ok(HashAlgorithm::Sha256),
+            _ => Err(format!("Unknown hash algorithm: {}", s)),
+        }
+    }
+}
+
 
 pub use types::*;
 use timeline::process_id_timeline;
 use conflation::{deduplicate_record_batches, simple_conflate_batches, consolidate_final_batches};
-use batch_utils::{extract_date_as_datetime, extract_timestamp, add_hash_column};
+use batch_utils::{extract_date_as_datetime, extract_timestamp};
+
+/// Type alias for processing results from ID groups
+type IdGroupProcessingResult = (Vec<usize>, Vec<RecordBatch>);
 
 /// Chunked processing function that reduces memory usage for large datasets
 pub fn process_updates_chunked(
@@ -27,18 +51,33 @@ pub fn process_updates_chunked(
     update_mode: UpdateMode,
     chunk_size: usize,
 ) -> Result<ChangeSet, String> {
+    process_updates_chunked_with_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, chunk_size, HashAlgorithm::default())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn process_updates_chunked_with_algorithm(
+    current_state: RecordBatch,
+    updates: RecordBatch,
+    id_columns: Vec<String>,
+    value_columns: Vec<String>,
+    system_date: NaiveDate,
+    update_mode: UpdateMode,
+    chunk_size: usize,
+    algorithm: HashAlgorithm,
+) -> Result<ChangeSet, String> {
     let current_rows = current_state.num_rows();
     let updates_rows = updates.num_rows();
     
     // If data is small enough, use regular processing
     if current_rows <= chunk_size && updates_rows <= chunk_size {
-        return process_updates(
+        return process_updates_with_algorithm(
             current_state,
             updates,
             id_columns,
             value_columns,
             system_date,
             update_mode,
+            algorithm,
         );
     }
     
@@ -49,13 +88,14 @@ pub fn process_updates_chunked(
     // The real memory issue was the cartesian product bug in the original implementation.
     // Let's test if regular processing actually works fine for reasonable dataset sizes.
     
-    process_updates(
+    process_updates_with_algorithm(
         current_state,
         updates,
         id_columns,
         value_columns,
         system_date,
         update_mode,
+        algorithm,
     )
 }
 
@@ -68,14 +108,26 @@ pub fn process_updates(
     system_date: NaiveDate,
     update_mode: UpdateMode,
 ) -> Result<ChangeSet, String> {
+    process_updates_with_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, HashAlgorithm::default())
+}
+
+pub fn process_updates_with_algorithm(
+    current_state: RecordBatch,
+    updates: RecordBatch,
+    id_columns: Vec<String>,
+    value_columns: Vec<String>,
+    system_date: NaiveDate,
+    update_mode: UpdateMode,
+    algorithm: HashAlgorithm,
+) -> Result<ChangeSet, String> {
     // PROFILING: Add detailed timing to identify bottlenecks
     let start_time = std::time::Instant::now();
     
     // OPTIMIZED APPROACH: Work directly with Arrow arrays, avoid expensive conversions
     
     // Ensure value_hash columns are computed if missing or empty
-    let current_state = ensure_hash_column(current_state, &value_columns)?;
-    let updates = ensure_hash_column(updates, &value_columns)?;
+    let current_state = ensure_hash_column_with_algorithm(current_state, &value_columns, algorithm)?;
+    let updates = ensure_hash_column_with_algorithm(updates, &value_columns, algorithm)?;
     
     // Generate a consistent as_of_from timestamp for tombstone records
     let batch_timestamp = chrono::Utc::now().naive_utc();
@@ -175,7 +227,7 @@ pub fn process_updates(
     if use_parallel {
         // Process ID groups in parallel
         let parallel_start = std::time::Instant::now();
-        let results: Result<Vec<(Vec<usize>, Vec<RecordBatch>)>, String> = id_groups
+        let results: Result<Vec<IdGroupProcessingResult>, String> = id_groups
             .into_par_iter()
             .map(|(_id_key, (current_row_indices, update_row_indices))| {
                 process_id_group_optimized(
@@ -203,7 +255,6 @@ pub fn process_updates(
         let _collection_time = collection_start.elapsed();
     } else {
         // Process ID groups serially for small datasets
-        let mut _processed_groups = 0;
         let serial_start = std::time::Instant::now();
         for (_id_key, (current_row_indices, update_row_indices)) in id_groups {
             let (expire_indices, insert_batches) = process_id_group_optimized(
@@ -220,7 +271,7 @@ pub fn process_updates(
             
             to_expire.extend(expire_indices);
             to_insert.extend(insert_batches);
-            _processed_groups += 1;
+            // _processed_groups is the loop counter variable from enumerate()
         }
         let _serial_time = serial_start.elapsed();
     }
@@ -267,8 +318,8 @@ pub fn process_updates(
     Ok(ChangeSet { to_expire, to_insert, expired_records })
 }
 
-/// Ensures the value_hash column exists and is computed if missing or empty
-fn ensure_hash_column(batch: RecordBatch, value_columns: &[String]) -> Result<RecordBatch, String> {
+/// Ensures the value_hash column exists and is computed if missing or empty using fast Arrow-direct hashing
+fn ensure_hash_column_with_algorithm(batch: RecordBatch, value_columns: &[String], algorithm: HashAlgorithm) -> Result<RecordBatch, String> {
     // Handle empty batches - no need to compute hashes
     if batch.num_rows() == 0 {
         return Ok(batch);
@@ -288,13 +339,14 @@ fn ensure_hash_column(batch: RecordBatch, value_columns: &[String]) -> Result<Re
         }
     }
     
-    // Hash column is missing or has empty values, compute it
-    crate::batch_utils::add_hash_column(&batch, value_columns)
+    // Hash column is missing or has empty values, compute it using fast Arrow-direct hashing
+    crate::arrow_hash::add_hash_column_arrow_direct(&batch, value_columns, algorithm)
 }
 
 // Extract ID group processing logic for reuse in parallel and serial paths
 
 /// Optimized ID group processing that works with row indices instead of expensive structures
+#[allow(clippy::too_many_arguments)]
 fn process_id_group_optimized(
     current_row_indices: &[usize],
     update_row_indices: &[usize],
@@ -517,6 +569,7 @@ fn create_tombstone_records_optimized(
 }
 
 /// Optimized full state processing without expensive conversions until needed
+#[allow(clippy::too_many_arguments)]
 fn process_full_state_optimized(
     current_row_indices: &[usize],
     update_row_indices: &[usize],
@@ -725,54 +778,18 @@ fn compute_changes(
     system_date: String,
     update_mode: String,
 ) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
-    // Convert PyRecordBatch to Arrow RecordBatch
-    let current_batch = current_state.as_ref().clone();
-    let updates_batch = updates.as_ref().clone();
-    
-    // Parse system_date
-    let system_date = chrono::NaiveDate::parse_from_str(&system_date, "%Y-%m-%d")
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid date format: {}", e)))?;
-    
-    // Parse update_mode
-    let mode = match update_mode.as_str() {
-        "delta" => UpdateMode::Delta,
-        "full_state" => UpdateMode::FullState,
-        _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid update_mode. Must be 'delta' or 'full_state'")),
-    };
-    
-    // Call the process_updates function
-    let changeset = process_updates(
-        current_batch,
-        updates_batch,
-        id_columns,
-        value_columns,
-        system_date,
-        mode,
-    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
-    
-    // Convert the result back to Python types
-    let expire_indices = changeset.to_expire;
-    let insert_batches: Vec<PyRecordBatch> = changeset.to_insert
-        .into_iter()
-        .map(|batch| PyRecordBatch::new(batch))
-        .collect();
-    let expired_batches: Vec<PyRecordBatch> = changeset.expired_records
-        .into_iter()
-        .map(|batch| PyRecordBatch::new(batch))
-        .collect();
-    
-    Ok((expire_indices, insert_batches, expired_batches))
+    compute_changes_with_hash_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, None)
 }
 
 #[pyfunction]
-fn compute_changes_chunked(
+fn compute_changes_with_hash_algorithm(
     current_state: PyRecordBatch,
     updates: PyRecordBatch,
     id_columns: Vec<String>,
     value_columns: Vec<String>,
     system_date: String,
     update_mode: String,
-    chunk_size: Option<usize>,
+    hash_algorithm: Option<String>,
 ) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
     // Convert PyRecordBatch to Arrow RecordBatch
     let current_batch = current_state.as_ref().clone();
@@ -789,11 +806,90 @@ fn compute_changes_chunked(
         _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid update_mode. Must be 'delta' or 'full_state'")),
     };
     
+    // Parse hash algorithm
+    let algorithm = match hash_algorithm {
+        Some(algo_str) => HashAlgorithm::from_str(&algo_str)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?,
+        None => HashAlgorithm::default(),
+    };
+    
+    // Call the process_updates function
+    let changeset = process_updates_with_algorithm(
+        current_batch,
+        updates_batch,
+        id_columns,
+        value_columns,
+        system_date,
+        mode,
+        algorithm,
+    ).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    
+    // Convert the result back to Python types
+    let expire_indices = changeset.to_expire;
+    let insert_batches: Vec<PyRecordBatch> = changeset.to_insert
+        .into_iter()
+        .map(PyRecordBatch::new)
+        .collect();
+    let expired_batches: Vec<PyRecordBatch> = changeset.expired_records
+        .into_iter()
+        .map(PyRecordBatch::new)
+        .collect();
+    
+    Ok((expire_indices, insert_batches, expired_batches))
+}
+
+#[pyfunction]
+fn compute_changes_chunked(
+    current_state: PyRecordBatch,
+    updates: PyRecordBatch,
+    id_columns: Vec<String>,
+    value_columns: Vec<String>,
+    system_date: String,
+    update_mode: String,
+    chunk_size: Option<usize>,
+) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
+    compute_changes_chunked_with_hash_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, chunk_size, None)
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn compute_changes_chunked_with_hash_algorithm(
+    current_state: PyRecordBatch,
+    updates: PyRecordBatch,
+    id_columns: Vec<String>,
+    value_columns: Vec<String>,
+    system_date: String,
+    update_mode: String,
+    chunk_size: Option<usize>,
+    hash_algorithm: Option<String>,
+) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
+    // Convert PyRecordBatch to Arrow RecordBatch
+    let current_batch = current_state.as_ref().clone();
+    let updates_batch = updates.as_ref().clone();
+    
+    // Parse system_date
+    let system_date = chrono::NaiveDate::parse_from_str(&system_date, "%Y-%m-%d")
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid date format: {}", e)))?;
+    
+    // Parse update_mode
+    let mode = match update_mode.as_str() {
+        "delta" => UpdateMode::Delta,
+        "full_state" => UpdateMode::FullState,
+        _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid update_mode. Must be 'delta' or 'full_state'")),
+    };
+    
+    // Parse hash algorithm
+    let algorithm = match hash_algorithm {
+        Some(algo_str) => HashAlgorithm::from_str(&algo_str)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?,
+        None => HashAlgorithm::default(),
+    };
+    
     // Use default chunk size if not provided
     let chunk_size = chunk_size.unwrap_or(50000);
     
     // Call the chunked processing function
-    let changeset = process_updates_chunked(
+    let changeset = process_updates_chunked_with_algorithm(
         current_batch,
         updates_batch,
         id_columns,
@@ -801,17 +897,18 @@ fn compute_changes_chunked(
         system_date,
         mode,
         chunk_size,
-    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        algorithm,
+    ).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     
     // Convert the result back to Python types
     let expire_indices = changeset.to_expire;
     let insert_batches: Vec<PyRecordBatch> = changeset.to_insert
         .into_iter()
-        .map(|batch| PyRecordBatch::new(batch))
+        .map(PyRecordBatch::new)
         .collect();
     let expired_batches: Vec<PyRecordBatch> = changeset.expired_records
         .into_iter()
-        .map(|batch| PyRecordBatch::new(batch))
+        .map(PyRecordBatch::new)
         .collect();
     
     Ok((expire_indices, insert_batches, expired_batches))
@@ -822,12 +919,28 @@ fn add_hash_key(
     record_batch: PyRecordBatch,
     value_fields: Vec<String>,
 ) -> PyResult<PyRecordBatch> {
+    add_hash_key_with_algorithm(record_batch, value_fields, None)
+}
+
+#[pyfunction]
+fn add_hash_key_with_algorithm(
+    record_batch: PyRecordBatch,
+    value_fields: Vec<String>,
+    hash_algorithm: Option<String>,
+) -> PyResult<PyRecordBatch> {
     // Convert PyRecordBatch to Arrow RecordBatch
     let batch = record_batch.as_ref().clone();
     
-    // Call the add_hash_column function
-    let batch_with_hash = add_hash_column(&batch, &value_fields)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+    // Parse hash algorithm
+    let algorithm = match hash_algorithm {
+        Some(algo_str) => HashAlgorithm::from_str(&algo_str)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?,
+        None => HashAlgorithm::default(),
+    };
+    
+    // Call the fast Arrow-direct hash function
+    let batch_with_hash = crate::arrow_hash::add_hash_column_arrow_direct(&batch, &value_fields, algorithm)
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     
     // Convert back to PyRecordBatch
     Ok(PyRecordBatch::new(batch_with_hash))
@@ -836,7 +949,10 @@ fn add_hash_key(
 #[pymodule]
 fn pytemporal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_changes, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_changes_with_hash_algorithm, m)?)?;
     m.add_function(wrap_pyfunction!(compute_changes_chunked, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_changes_chunked_with_hash_algorithm, m)?)?;
     m.add_function(wrap_pyfunction!(add_hash_key, m)?)?;
+    m.add_function(wrap_pyfunction!(add_hash_key_with_algorithm, m)?)?;
     Ok(())
 }
