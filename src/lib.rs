@@ -2,7 +2,7 @@ use arrow::array::{RecordBatch};
 use chrono::NaiveDate;
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use arrow::array::Array;
 use rayon::prelude::*;
 
@@ -62,73 +62,132 @@ pub fn process_updates_with_algorithm(
     update_mode: UpdateMode,
     algorithm: HashAlgorithm,
 ) -> Result<ChangeSet, String> {
-    // PROFILING: Add detailed timing to identify bottlenecks
     let start_time = std::time::Instant::now();
     
-    // OPTIMIZED APPROACH: Work directly with Arrow arrays, avoid expensive conversions
+    // Phase 0: Input validation and preprocessing 
+    let (current_state, updates, batch_timestamp) = prepare_inputs(
+        current_state, updates, &value_columns, algorithm
+    )?;
     
-    // Ensure value_hash columns are computed if missing or empty
-    let current_state = ensure_hash_column_with_algorithm(current_state, &value_columns, algorithm)?;
-    let updates = ensure_hash_column_with_algorithm(updates, &value_columns, algorithm)?;
+    // Handle quick paths for empty inputs
+    if let Some(changeset) = handle_empty_inputs(
+        &current_state, &updates, &value_columns, system_date, update_mode, batch_timestamp
+    )? {
+        return Ok(changeset);
+    }
     
-    // Generate a consistent as_of_from timestamp for tombstone records
+    // Phase 1: ID Grouping with performance optimizations
+    let phase1_start = std::time::Instant::now();
+    let id_groups = build_id_groups(&current_state, &updates, &id_columns)?;
+    let _phase1_total = phase1_start.elapsed();
+    
+    // Phase 2: Process ID groups with optimized parallel/serial strategy
+    let phase2_start = std::time::Instant::now();
+    let (to_expire, to_insert) = process_all_id_groups(
+        id_groups, &current_state, &updates, &id_columns, &value_columns,
+        system_date, update_mode, batch_timestamp
+    )?;
+    let _phase2_total = phase2_start.elapsed();
+    
+    // Phase 3: Post-processing and changeset building
+    let phase3_start = std::time::Instant::now();
+    let changeset = build_final_changeset(
+        to_expire, to_insert, &current_state, batch_timestamp
+    )?;
+    let _phase3_total = phase3_start.elapsed();
+    
+    let _total_time = start_time.elapsed();
+
+    Ok(changeset)
+}
+
+/// Prepare inputs by ensuring hash columns exist and generating batch timestamp
+fn prepare_inputs(
+    current_state: RecordBatch,
+    updates: RecordBatch,
+    value_columns: &[String],
+    algorithm: HashAlgorithm,
+) -> Result<(RecordBatch, RecordBatch, chrono::NaiveDateTime), String> {
+    // Ensure value_hash columns are computed if missing or empty  
+    let current_state = ensure_hash_column_with_algorithm(current_state, value_columns, algorithm)?;
+    let updates = ensure_hash_column_with_algorithm(updates, value_columns, algorithm)?;
+    
+    // Generate consistent timestamp for all operations in this batch
     let batch_timestamp = chrono::Utc::now().naive_utc();
     
-    let mut to_expire = Vec::new();
-    let mut to_insert = Vec::new();
-    
-    // Quick path: If no updates, handle based on update mode
+    Ok((current_state, updates, batch_timestamp))
+}
+
+/// Handle quick paths for empty input cases
+fn handle_empty_inputs(
+    current_state: &RecordBatch,
+    updates: &RecordBatch,
+    value_columns: &[String],
+    system_date: NaiveDate,
+    update_mode: UpdateMode,
+    batch_timestamp: chrono::NaiveDateTime,
+) -> Result<Option<ChangeSet>, String> {
+    // No updates - handle based on mode
     if updates.num_rows() == 0 {
-        if update_mode == UpdateMode::FullState && current_state.num_rows() > 0 {
-            // In full state mode with no updates, create tombstones for all current records
+        return if update_mode == UpdateMode::FullState && current_state.num_rows() > 0 {
+            // Create tombstones for all current records in full state mode
             let current_indices: Vec<usize> = (0..current_state.num_rows()).collect();
             let tombstone_batch = create_tombstone_records_optimized(
                 &current_indices,
-                &current_state,
-                &value_columns,
+                current_state,
+                value_columns,
                 system_date,
                 batch_timestamp,
             )?;
             
-            // Create expired records batch with updated as_of_to timestamps
             let expired_batch = crate::batch_utils::create_expired_records_batch(
-                &current_state, 
+                current_state, 
                 &current_indices, 
                 batch_timestamp
             )?;
             
-            return Ok(ChangeSet {
+            Ok(Some(ChangeSet {
                 to_expire: current_indices,
                 to_insert: vec![tombstone_batch],
                 expired_records: vec![expired_batch],
-            });
+            }))
         } else {
-            // For delta mode or no current state, return empty changeset
-            return Ok(ChangeSet {
+            Ok(Some(ChangeSet {
                 to_expire: Vec::new(),
                 to_insert: Vec::new(),
                 expired_records: Vec::new(),
-            });
-        }
+            }))
+        };
     }
     
-    // Quick path: If no current state, just convert all updates to inserts
+    // No current state - all updates become inserts
     if current_state.num_rows() == 0 {
-        let all_insert = vec![updates];
-        return Ok(ChangeSet {
+        return Ok(Some(ChangeSet {
             to_expire: Vec::new(),
-            to_insert: all_insert,
+            to_insert: vec![updates.clone()],
             expired_records: Vec::new(),
-        });
+        }));
     }
     
-    // PROFILING: Phase 1 - ID Grouping
-    let phase1_start = std::time::Instant::now();
+    // Continue with normal processing
+    Ok(None)
+}
+
+/// Build ID groups using optimized direct array access for performance
+/// PERFORMANCE: Inlined to allow optimizer to see through to hot loops
+#[inline]
+fn build_id_groups(
+    current_state: &RecordBatch,
+    updates: &RecordBatch,
+    id_columns: &[String],
+) -> Result<FxHashMap<String, (Vec<usize>, Vec<usize>)>, String> {
+    // Pre-size FxHashMap with estimated capacity for better performance
+    // Estimate: Most datasets have 10-50% unique ID combinations
+    let estimated_unique_ids = ((current_state.num_rows() + updates.num_rows()) / 3).max(16);
+    let mut id_groups: FxHashMap<String, (Vec<usize>, Vec<usize>)> = 
+        FxHashMap::with_capacity_and_hasher(estimated_unique_ids, Default::default());
     
-    // OPTIMIZED: Group by ID using direct array access, no conversions yet
-    let mut id_groups: HashMap<String, (Vec<usize>, Vec<usize>)> = HashMap::new();
-    
-    // Extract ID column arrays once
+    // Extract ID column arrays once for efficiency
     let current_id_arrays: Vec<_> = id_columns.iter()
         .map(|col| current_state.column_by_name(col).unwrap().clone())
         .collect();
@@ -136,49 +195,57 @@ pub fn process_updates_with_algorithm(
         .map(|col| updates.column_by_name(col).unwrap().clone())
         .collect();
     
-    let _array_extract_time = phase1_start.elapsed();
-    
-    // Group current state rows by ID (using string representation for efficiency)
-    let current_grouping_start = std::time::Instant::now();
+    // Group current state rows by ID key
     for row_idx in 0..current_state.num_rows() {
         let id_key = create_id_key(&current_id_arrays, row_idx);
         id_groups.entry(id_key).or_insert((Vec::new(), Vec::new())).0.push(row_idx);
     }
-    let _current_grouping_time = current_grouping_start.elapsed();
     
-    // Group update rows by ID
-    let updates_grouping_start = std::time::Instant::now();
+    // Group update rows by ID key  
     for row_idx in 0..updates.num_rows() {
         let id_key = create_id_key(&updates_id_arrays, row_idx);
         id_groups.entry(id_key).or_insert((Vec::new(), Vec::new())).1.push(row_idx);
     }
-    let _updates_grouping_time = updates_grouping_start.elapsed();
     
-    let _phase1_total = phase1_start.elapsed();
+    Ok(id_groups)
+}
+
+/// Process all ID groups with optimal parallel/serial strategy
+#[allow(clippy::too_many_arguments)]
+fn process_all_id_groups(
+    id_groups: FxHashMap<String, (Vec<usize>, Vec<usize>)>,
+    current_state: &RecordBatch,
+    updates: &RecordBatch,
+    id_columns: &[String],
+    value_columns: &[String],
+    system_date: NaiveDate,
+    update_mode: UpdateMode,
+    batch_timestamp: chrono::NaiveDateTime,
+) -> Result<(Vec<usize>, Vec<RecordBatch>), String> {
+    // Pre-allocate vectors with estimated capacity to reduce reallocations
+    // Estimate: on average, each ID group affects 1-2 current state records and creates 1-3 insert batches
+    let estimated_expire_capacity = id_groups.len() * 2;
+    let estimated_insert_capacity = id_groups.len() * 3;
     
-    // PROFILING: Phase 2 - ID Group Processing
-    let phase2_start = std::time::Instant::now();
+    let mut to_expire = Vec::with_capacity(estimated_expire_capacity);
+    let mut to_insert = Vec::with_capacity(estimated_insert_capacity);
     
-    // OPTIMIZED: Process ID groups with minimal object creation
-    // Only create expensive BitemporalRecord structures when needed for temporal processing
-    
+    // Determine optimal processing strategy based on data size
     let use_parallel = id_groups.len() > 50 ||
                       (current_state.num_rows() + updates.num_rows()) > 10000;
     
-    
     if use_parallel {
-        // Process ID groups in parallel
-        let parallel_start = std::time::Instant::now();
+        // Parallel processing for large datasets
         let results: Result<Vec<IdGroupProcessingResult>, String> = id_groups
             .into_par_iter()
             .map(|(_id_key, (current_row_indices, update_row_indices))| {
                 process_id_group_optimized(
                     &current_row_indices,
                     &update_row_indices,
-                    &current_state,
-                    &updates,
-                    &id_columns,
-                    &value_columns,
+                    current_state,
+                    updates,
+                    id_columns,
+                    value_columns,
                     system_date,
                     update_mode,
                     batch_timestamp,
@@ -186,26 +253,21 @@ pub fn process_updates_with_algorithm(
             })
             .collect();
         
-        let _parallel_time = parallel_start.elapsed();
-        
         let results = results?;
-        let collection_start = std::time::Instant::now();
         for (expire_indices, insert_batches) in results {
             to_expire.extend(expire_indices);
             to_insert.extend(insert_batches);
         }
-        let _collection_time = collection_start.elapsed();
     } else {
-        // Process ID groups serially for small datasets
-        let serial_start = std::time::Instant::now();
+        // Serial processing for small datasets (avoids parallel overhead)
         for (_id_key, (current_row_indices, update_row_indices)) in id_groups {
             let (expire_indices, insert_batches) = process_id_group_optimized(
                 &current_row_indices,
                 &update_row_indices,
-                &current_state,
-                &updates,
-                &id_columns,
-                &value_columns,
+                current_state,
+                updates,
+                id_columns,
+                value_columns,
                 system_date,
                 update_mode,
                 batch_timestamp,
@@ -213,50 +275,35 @@ pub fn process_updates_with_algorithm(
             
             to_expire.extend(expire_indices);
             to_insert.extend(insert_batches);
-            // _processed_groups is the loop counter variable from enumerate()
         }
-        let _serial_time = serial_start.elapsed();
     }
     
-    let _phase2_total = phase2_start.elapsed();
-    
-    // PROFILING: Phase 3 - Post-processing
-    let phase3_start = std::time::Instant::now();
-    
+    Ok((to_expire, to_insert))
+}
+
+/// Build final changeset with all post-processing optimizations
+fn build_final_changeset(
+    mut to_expire: Vec<usize>,
+    mut to_insert: Vec<RecordBatch>,
+    current_state: &RecordBatch,
+    batch_timestamp: chrono::NaiveDateTime,
+) -> Result<ChangeSet, String> {
     // Sort and deduplicate expiry indices
-    let sort_start = std::time::Instant::now();
     to_expire.sort_unstable();
     to_expire.dedup();
-    let _sort_time = sort_start.elapsed();
     
-    // Deduplicate insert batches by combining identical time periods
-    let dedup_start = std::time::Instant::now();
+    // Apply all post-processing optimizations to insert batches
     to_insert = deduplicate_record_batches(to_insert)?;
-    let _dedup_time = dedup_start.elapsed();
-    
-    // Simple post-processing conflation for adjacent segments
-    let conflate_start = std::time::Instant::now();
     to_insert = simple_conflate_batches(to_insert)?;
-    let _conflate_time = conflate_start.elapsed();
-    
-    // Final consolidation - combine all batches into fewer large batches
-    let consolidate_start = std::time::Instant::now();
     to_insert = consolidate_final_batches(to_insert)?;
-    let _consolidate_time = consolidate_start.elapsed();
     
     // Create expired record batches with updated as_of_to timestamp
-    let expired_start = std::time::Instant::now();
     let expired_records = if !to_expire.is_empty() {
-        vec![crate::batch_utils::create_expired_records_batch(&current_state, &to_expire, batch_timestamp)?]
+        vec![crate::batch_utils::create_expired_records_batch(current_state, &to_expire, batch_timestamp)?]
     } else {
         Vec::new()
     };
-    let _expired_time = expired_start.elapsed();
     
-    let _phase3_total = phase3_start.elapsed();
-    
-    let _total_time = start_time.elapsed();
-
     Ok(ChangeSet { to_expire, to_insert, expired_records })
 }
 
@@ -288,7 +335,9 @@ fn ensure_hash_column_with_algorithm(batch: RecordBatch, value_columns: &[String
 // Extract ID group processing logic for reuse in parallel and serial paths
 
 /// Optimized ID group processing that works with row indices instead of expensive structures
+/// PERFORMANCE: Inline hint for warm path (called once per ID group, ~5000 times)
 #[allow(clippy::too_many_arguments)]
+#[inline]
 fn process_id_group_optimized(
     current_row_indices: &[usize],
     update_row_indices: &[usize],
@@ -607,6 +656,8 @@ fn process_full_state_optimized(
 }
 
 /// Helper function to extract datetime from any date/timestamp array type
+/// PERFORMANCE: Inlined for hot path - called for every temporal field access
+#[inline(always)]
 fn extract_datetime_flexible(array: &dyn arrow::array::Array, idx: usize) -> Result<chrono::NaiveDateTime, String> {
     use arrow::array::*;
     use arrow::datatypes::TimeUnit;
@@ -733,6 +784,8 @@ fn create_bitemporal_records_from_indices(
 }
 
 /// Fast ID key creation using string concatenation instead of expensive ScalarValue conversions
+/// PERFORMANCE: Inlined because this is called 850,000+ times (once per row)
+#[inline(always)]
 fn create_id_key(id_arrays: &[arrow::array::ArrayRef], row_idx: usize) -> String {
     let mut key = String::with_capacity(64); // Pre-allocate reasonable capacity
     

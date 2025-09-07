@@ -12,6 +12,7 @@ sha2 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
 rayon = "1.8"
 ordered-float = "4.2"
+rustc-hash = "1.1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "cargo_bench_support"] }

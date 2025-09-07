@@ -1337,6 +1337,7 @@ dependencies = [
  "pyo3",
  "pyo3-arrow",
  "rayon",
+ "rustc-hash",
  "sha2",
  "xxhash-rust",
 ]
