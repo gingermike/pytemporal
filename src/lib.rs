@@ -257,6 +257,13 @@ fn process_all_id_groups(
         for (expire_indices, insert_batches) in results {
             to_expire.extend(expire_indices);
             to_insert.extend(insert_batches);
+            
+            // MEMORY OPTIMIZATION: Incremental consolidation to prevent memory buildup
+            // Apply deduplication + consolidation when we have too many small batches
+            if to_insert.len() > 200 {
+                to_insert = crate::conflation::deduplicate_record_batches(to_insert)?;
+                to_insert = crate::conflation::consolidate_final_batches(to_insert)?;
+            }
         }
     } else {
         // Serial processing for small datasets (avoids parallel overhead)
@@ -275,6 +282,13 @@ fn process_all_id_groups(
             
             to_expire.extend(expire_indices);
             to_insert.extend(insert_batches);
+            
+            // MEMORY OPTIMIZATION: Incremental consolidation to prevent memory buildup
+            // Apply deduplication + consolidation when we have too many small batches
+            if to_insert.len() > 200 {
+                to_insert = crate::conflation::deduplicate_record_batches(to_insert)?;
+                to_insert = crate::conflation::consolidate_final_batches(to_insert)?;
+            }
         }
     }
     
