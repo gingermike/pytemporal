@@ -36,68 +36,10 @@ impl HashAlgorithm {
 pub use types::*;
 use timeline::process_id_timeline;
 use conflation::{deduplicate_record_batches, simple_conflate_batches, consolidate_final_batches};
-use batch_utils::{extract_date_as_datetime, extract_timestamp};
 
 /// Type alias for processing results from ID groups
 type IdGroupProcessingResult = (Vec<usize>, Vec<RecordBatch>);
 
-/// Chunked processing function that reduces memory usage for large datasets
-pub fn process_updates_chunked(
-    current_state: RecordBatch,
-    updates: RecordBatch,
-    id_columns: Vec<String>,
-    value_columns: Vec<String>,
-    system_date: NaiveDate,
-    update_mode: UpdateMode,
-    chunk_size: usize,
-) -> Result<ChangeSet, String> {
-    process_updates_chunked_with_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, chunk_size, HashAlgorithm::default())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn process_updates_chunked_with_algorithm(
-    current_state: RecordBatch,
-    updates: RecordBatch,
-    id_columns: Vec<String>,
-    value_columns: Vec<String>,
-    system_date: NaiveDate,
-    update_mode: UpdateMode,
-    chunk_size: usize,
-    algorithm: HashAlgorithm,
-) -> Result<ChangeSet, String> {
-    let current_rows = current_state.num_rows();
-    let updates_rows = updates.num_rows();
-    
-    // If data is small enough, use regular processing
-    if current_rows <= chunk_size && updates_rows <= chunk_size {
-        return process_updates_with_algorithm(
-            current_state,
-            updates,
-            id_columns,
-            value_columns,
-            system_date,
-            update_mode,
-            algorithm,
-        );
-    }
-    
-    // FINAL SIMPLE APPROACH: For large datasets, just fall back to regular processing
-    // Chunking for bitemporal data is fundamentally complex because of the temporal 
-    // overlap relationships between current and updates.
-    
-    // The real memory issue was the cartesian product bug in the original implementation.
-    // Let's test if regular processing actually works fine for reasonable dataset sizes.
-    
-    process_updates_with_algorithm(
-        current_state,
-        updates,
-        id_columns,
-        value_columns,
-        system_date,
-        update_mode,
-        algorithm,
-    )
-}
 
 
 pub fn process_updates(
@@ -664,6 +606,80 @@ fn process_full_state_optimized(
     Ok(())
 }
 
+/// Helper function to extract datetime from any date/timestamp array type
+fn extract_datetime_flexible(array: &dyn arrow::array::Array, idx: usize) -> Result<chrono::NaiveDateTime, String> {
+    use arrow::array::*;
+    use arrow::datatypes::TimeUnit;
+    use chrono::NaiveDateTime;
+    
+    match array.data_type() {
+        // Date32 - days since epoch
+        arrow::datatypes::DataType::Date32 => {
+            let arr = array.as_any().downcast_ref::<Date32Array>()
+                .ok_or("Failed to downcast to Date32Array")?;
+            let days = arr.value(idx);
+            let date = chrono::NaiveDate::from_num_days_from_ce_opt(days + 719_163)
+                .ok_or_else(|| format!("Invalid Date32 value: {}", days))?;
+            Ok(date.and_hms_opt(0, 0, 0).unwrap())
+        }
+        // Date64 - milliseconds since epoch
+        arrow::datatypes::DataType::Date64 => {
+            let arr = array.as_any().downcast_ref::<Date64Array>()
+                .ok_or("Failed to downcast to Date64Array")?;
+            let millis = arr.value(idx);
+            let seconds = millis / 1000;
+            let nanos = ((millis % 1000) * 1_000_000) as u32;
+            Ok(chrono::DateTime::from_timestamp(seconds, nanos)
+                .ok_or_else(|| format!("Invalid Date64 value: {}", millis))?
+                .naive_utc())
+        }
+        // Timestamp with different time units
+        arrow::datatypes::DataType::Timestamp(unit, _) => {
+            match unit {
+                TimeUnit::Second => {
+                    let arr = array.as_any().downcast_ref::<TimestampSecondArray>()
+                        .ok_or("Failed to downcast to TimestampSecondArray")?;
+                    let seconds = arr.value(idx);
+                    Ok(chrono::DateTime::from_timestamp(seconds, 0)
+                        .ok_or_else(|| format!("Invalid timestamp seconds: {}", seconds))?
+                        .naive_utc())
+                }
+                TimeUnit::Millisecond => {
+                    let arr = array.as_any().downcast_ref::<TimestampMillisecondArray>()
+                        .ok_or("Failed to downcast to TimestampMillisecondArray")?;
+                    let millis = arr.value(idx);
+                    let seconds = millis / 1000;
+                    let nanos = ((millis % 1000) * 1_000_000) as u32;
+                    Ok(chrono::DateTime::from_timestamp(seconds, nanos)
+                        .ok_or_else(|| format!("Invalid timestamp milliseconds: {}", millis))?
+                        .naive_utc())
+                }
+                TimeUnit::Microsecond => {
+                    let arr = array.as_any().downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or("Failed to downcast to TimestampMicrosecondArray")?;
+                    let micros = arr.value(idx);
+                    let seconds = micros / 1_000_000;
+                    let nanos = ((micros % 1_000_000) * 1000) as u32;
+                    Ok(chrono::DateTime::from_timestamp(seconds, nanos)
+                        .ok_or_else(|| format!("Invalid timestamp microseconds: {}", micros))?
+                        .naive_utc())
+                }
+                TimeUnit::Nanosecond => {
+                    let arr = array.as_any().downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or("Failed to downcast to TimestampNanosecondArray")?;
+                    let nanos = arr.value(idx);
+                    let seconds = nanos / 1_000_000_000;
+                    let nano_part = (nanos % 1_000_000_000) as u32;
+                    Ok(chrono::DateTime::from_timestamp(seconds, nano_part)
+                        .ok_or_else(|| format!("Invalid timestamp nanoseconds: {}", nanos))?
+                        .naive_utc())
+                }
+            }
+        }
+        dt => Err(format!("Unsupported date/timestamp type for temporal columns: {:?}. Supported types: Date32, Date64, Timestamp(Second/Millisecond/Microsecond/Nanosecond)", dt))
+    }
+}
+
 /// Create BitemporalRecords only when needed for temporal processing
 fn create_bitemporal_records_from_indices(
     row_indices: &[usize],
@@ -677,13 +693,13 @@ fn create_bitemporal_records_from_indices(
     
     let mut records = Vec::with_capacity(row_indices.len());
     
-    // Extract arrays once
-    let eff_from_array = batch.column_by_name("effective_from").unwrap()
-        .as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
-    let eff_to_array = batch.column_by_name("effective_to").unwrap()
-        .as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
-    let as_of_from_array = batch.column_by_name("as_of_from").unwrap()
-        .as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
+    // Extract arrays once - now flexible with types
+    let eff_from_array = batch.column_by_name("effective_from")
+        .ok_or("effective_from column not found")?;
+    let eff_to_array = batch.column_by_name("effective_to")
+        .ok_or("effective_to column not found")?;
+    let as_of_from_array = batch.column_by_name("as_of_from")
+        .ok_or("as_of_from column not found")?;
     
     // Get the pre-computed hash column - it should always exist due to ensure_hash_column
     let hash_array = batch.column_by_name("value_hash")
@@ -694,7 +710,8 @@ fn create_bitemporal_records_from_indices(
     for &row_idx in row_indices {
         let mut id_values = Vec::new();
         for id_col in id_columns {
-            let col_idx = batch.schema().index_of(id_col).unwrap();
+            let col_idx = batch.schema().index_of(id_col)
+                .map_err(|_| format!("ID column {} not found", id_col))?;
             let array = batch.column(col_idx);
             id_values.push(ScalarValue::from_array(array, row_idx));
         }
@@ -702,9 +719,9 @@ fn create_bitemporal_records_from_indices(
         let record = BitemporalRecord {
             id_values,
             value_hash: hash_array.value(row_idx).to_string(),
-            effective_from: extract_date_as_datetime(eff_from_array, row_idx),
-            effective_to: extract_date_as_datetime(eff_to_array, row_idx),
-            as_of_from: extract_timestamp(as_of_from_array, row_idx),
+            effective_from: extract_datetime_flexible(eff_from_array.as_ref(), row_idx)?,
+            effective_to: extract_datetime_flexible(eff_to_array.as_ref(), row_idx)?,
+            as_of_from: extract_datetime_flexible(as_of_from_array.as_ref(), row_idx)?,
             as_of_to: MAX_TIMESTAMP,
             original_index: Some(row_idx),
         };
@@ -839,82 +856,6 @@ fn compute_changes_with_hash_algorithm(
 }
 
 #[pyfunction]
-fn compute_changes_chunked(
-    current_state: PyRecordBatch,
-    updates: PyRecordBatch,
-    id_columns: Vec<String>,
-    value_columns: Vec<String>,
-    system_date: String,
-    update_mode: String,
-    chunk_size: Option<usize>,
-) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
-    compute_changes_chunked_with_hash_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, chunk_size, None)
-}
-
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-fn compute_changes_chunked_with_hash_algorithm(
-    current_state: PyRecordBatch,
-    updates: PyRecordBatch,
-    id_columns: Vec<String>,
-    value_columns: Vec<String>,
-    system_date: String,
-    update_mode: String,
-    chunk_size: Option<usize>,
-    hash_algorithm: Option<String>,
-) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
-    // Convert PyRecordBatch to Arrow RecordBatch
-    let current_batch = current_state.as_ref().clone();
-    let updates_batch = updates.as_ref().clone();
-    
-    // Parse system_date
-    let system_date = chrono::NaiveDate::parse_from_str(&system_date, "%Y-%m-%d")
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid date format: {}", e)))?;
-    
-    // Parse update_mode
-    let mode = match update_mode.as_str() {
-        "delta" => UpdateMode::Delta,
-        "full_state" => UpdateMode::FullState,
-        _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid update_mode. Must be 'delta' or 'full_state'")),
-    };
-    
-    // Parse hash algorithm
-    let algorithm = match hash_algorithm {
-        Some(algo_str) => HashAlgorithm::from_str(&algo_str)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?,
-        None => HashAlgorithm::default(),
-    };
-    
-    // Use default chunk size if not provided
-    let chunk_size = chunk_size.unwrap_or(50000);
-    
-    // Call the chunked processing function
-    let changeset = process_updates_chunked_with_algorithm(
-        current_batch,
-        updates_batch,
-        id_columns,
-        value_columns,
-        system_date,
-        mode,
-        chunk_size,
-        algorithm,
-    ).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-    
-    // Convert the result back to Python types
-    let expire_indices = changeset.to_expire;
-    let insert_batches: Vec<PyRecordBatch> = changeset.to_insert
-        .into_iter()
-        .map(PyRecordBatch::new)
-        .collect();
-    let expired_batches: Vec<PyRecordBatch> = changeset.expired_records
-        .into_iter()
-        .map(PyRecordBatch::new)
-        .collect();
-    
-    Ok((expire_indices, insert_batches, expired_batches))
-}
-
-#[pyfunction]
 fn add_hash_key(
     record_batch: PyRecordBatch,
     value_fields: Vec<String>,
@@ -950,8 +891,6 @@ fn add_hash_key_with_algorithm(
 fn pytemporal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_changes, m)?)?;
     m.add_function(wrap_pyfunction!(compute_changes_with_hash_algorithm, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_changes_chunked, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_changes_chunked_with_hash_algorithm, m)?)?;
     m.add_function(wrap_pyfunction!(add_hash_key, m)?)?;
     m.add_function(wrap_pyfunction!(add_hash_key_with_algorithm, m)?)?;
     Ok(())

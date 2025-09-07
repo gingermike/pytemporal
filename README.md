@@ -4,12 +4,12 @@ A high-performance Rust library with Python bindings for processing bitemporal t
 
 ## Features
 
-- **Ultra-High Performance**: 800k rows × 80 columns processed in 10 seconds (88K rows/sec)
-- **Arrow-Direct Hashing**: Zero-deserialization hash computation for 57% performance improvement
+- **High Performance**: ~82,500 rows/second throughput with full bitemporal processing
+- **Arrow-Direct Hashing**: Zero-deserialization hash computation for improved performance
 - **Configurable Hash Algorithms**: XxHash (default) or SHA256 for legacy compatibility
 - **Optimized Python Wrapper**: Batch consolidation reduces conversion overhead to <0.1 seconds
-- **Memory Efficient**: Chunked processing for large datasets with 17x lower memory usage
 - **Zero-Copy Processing**: Apache Arrow columnar data format for efficient memory usage
+- **Flexible Date/Time Support**: Handles Date32, Date64, and all Timestamp types (Second/Millisecond/Microsecond/Nanosecond)
 - **Parallel Processing**: Rayon-based parallelization with adaptive thresholds
 - **Conflation**: Automatic merging of adjacent segments with identical values to reduce storage
 - **Full State Mode**: Complete state replacement with tombstone records for audit trails
@@ -341,40 +341,38 @@ The algorithm uses adaptive parallelization:
 ### Current Performance (Optimized)
 Benchmarked on modern hardware with Arrow-direct hashing:
 
-**Large Scale Performance:**
-- **800k rows × 80 columns**: 10.0 seconds total processing
-- **Throughput**: 88,000 rows/second (chunked processing)
-- **Memory Usage**: 506MB (vs 8.8GB without chunking)
+**Large Scale Performance (Tested Configuration):**
+- **800k rows × 80 columns**: ~10 seconds total processing
+- **Throughput**: ~82,500 rows/second
+- **Memory Usage**: ~10-12GB for full dataset
 - **Data Complexity**: 70.4 million cell evaluations
 
 **Hash Computation Performance:**
 - **XxHash**: 1.13M rows/second (16-character hashes)
 - **SHA256**: 925K rows/second (64-character hashes)
-- **Performance Gain**: 57% faster with Arrow-direct optimization
-- **Memory Efficiency**: XxHash uses 1.5MB vs SHA256's 66MB during hashing
+- **Performance Gain**: Significant improvements with Arrow-direct optimization
+- **Memory Efficiency**: XxHash provides better memory usage than SHA256
 
 ### Optimization History
 
 **Arrow-Direct Hashing Breakthrough:**
 - **Before**: ScalarValue conversion bottleneck (717K rows/sec)
 - **After**: Direct Arrow array access (1.13M rows/sec)
-- **Improvement**: 57% faster hash computation
-- **Key Innovation**: Eliminated 64M object allocations (800k×80 conversions)
+- **Improvement**: Faster hash computation through direct Arrow array processing
+- **Key Innovation**: Eliminated expensive object allocations during hash computation
 
 **Python Wrapper Performance (Optimized):**
 - **Batch Consolidation**: Individual record batches → 10k-row batches  
 - **Conversion Overhead**: <0.1 seconds (was 30+ seconds)
-- **Overhead Ratio**: 20% of Rust processing time
-- **Memory Efficiency**: 17x lower memory usage with chunked processing
+- **Overhead Ratio**: Minimal with batch consolidation
 
 ### Performance Breakdown
 
 | Component | Time | Throughput | Memory |
 |-----------|------|------------|---------|
-| Hash Computation (XxHash) | 0.7s | 1.13M rows/sec | 1.5MB |
-| Hash Computation (SHA256) | 0.9s | 925K rows/sec | 66MB |
-| Full Pipeline (Chunked) | 10.0s | 88K rows/sec | 506MB |
-| Full Pipeline (Regular) | 11.2s | 79K rows/sec | 8.8GB |
+| Hash Computation (XxHash) | 0.7s | 1.13M rows/sec | Low |
+| Hash Computation (SHA256) | 0.9s | 925K rows/sec | Higher |
+| Full Pipeline (800k rows) | ~10s | ~82.5K rows/sec | ~10-12GB |
 
 ### Hash Algorithm Comparison
 
@@ -495,7 +493,6 @@ uv run maturin develop
 - **Arrow-Direct Processing**: Zero-deserialization hash computation for maximum speed
 - **Configurable Hashing**: XxHash (default) or SHA256 (legacy) algorithms
 - **Parallel Execution**: Rayon-based parallelization with adaptive thresholds
-- **Memory Optimization**: Chunked processing for large datasets
 - **Post-Processing Conflation**: Optimal storage through adjacent segment merging
 - **Batch Consolidation**: Efficient Python conversion with consolidated batches
 - **Modular Design**: Clean separation of concerns across specialized modules

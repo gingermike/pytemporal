@@ -28,8 +28,8 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 **⚠️  IMPORTANT**: After making changes to Rust code (src/lib.rs), you MUST rebuild the Python bindings with `uv run maturin develop` before running Python tests. Changes to Rust code are NOT automatically reflected in Python tests until you rebuild the bindings. This has caused confusion in the past where fixes appeared not to work when they actually did.
 
 ## Performance Characteristics
-- **Baseline**: ~1.5s for 500k records (serial processing)
-- **Optimized**: ~885ms for 500k records (40% improvement with adaptive parallelization)
+- **Processing Speed**: ~82,500 rows/second throughput (tested with 880k rows)
+- **Memory Usage**: ~10-12GB for 800k rows × 80 columns dataset
 - **Parallelization**: Uses Rayon, adaptive thresholds (>50 ID groups OR >10k total records)
 - **Conflation**: Reduces output rows by merging adjacent segments with same value hash
 
@@ -98,9 +98,9 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-08-29**: Fixed full_state mode logic that was incorrectly expiring ALL current records regardless of value changes. Updated implementation to only expire/insert records when values actually change, using SHA256 hash comparison for efficiency. This prevents unnecessary database operations for unchanged records in full_state mode.
 - **2025-08-30**: Implemented tombstone record creation for full_state mode. When records exist in current state but not in updates (deletion scenario), the system now creates proper tombstone records with effective_to=system_date to maintain complete bitemporal audit trail. All 23 Rust tests and 24 Python tests pass.
 - **2025-08-30**: Major performance optimization through batch consolidation. Added consolidate_final_batches() function that combines many small single-row batches into fewer large 10k-row batches, reducing Python conversion overhead from 30+ seconds to <0.1 seconds for large datasets. Achieved 300x+ performance improvement in Python wrapper while preserving all functionality.
-- **2025-09-02**: Implemented chunked processing to solve extreme memory usage issues. Added `compute_changes_chunked()` function that processes large datasets in configurable chunks (default 50k rows) to prevent 32GB+ memory usage. Successfully tested with 350k rows × 15 columns using only ~1GB memory vs 32GB+ without chunking. Function available as `pytemporal.compute_changes_chunked()` with optional chunk_size parameter.
-- **2025-09-06**: Implemented configurable hash algorithms with XxHash as default and SHA256 for legacy compatibility. Added Arrow-direct hash computation that bypasses expensive Arrow→Rust serialization, achieving 57% performance improvement (717K→1.13M rows/sec). XxHash provides 22% better performance than SHA256 while using 44x less memory during computation.
-- **2025-09-06**: Achieved ultra-high performance milestone: 800k rows × 80 columns processed in 10.0 seconds (88K rows/sec throughput) with optimized chunked processing. Memory usage reduced to 506MB vs 8.8GB without chunking (17x improvement). All compiler warnings eliminated and codebase cleaned up with Arrow-direct hashing as the standard implementation.
+- **2025-09-02**: Investigated chunked processing approach. Determined that chunking is fundamentally incompatible with bitemporal timeline processing requirements.
+- **2025-09-06**: Implemented configurable hash algorithms with XxHash as default and SHA256 for legacy compatibility. Added Arrow-direct hash computation that bypasses expensive Arrow→Rust serialization for improved performance.
+- **2025-09-07**: Fixed critical timestamp type handling regression. The code now properly preserves input schema timestamp types (Date32, Date64, TimestampSecond/Millisecond/Microsecond/Nanosecond) throughout the processing pipeline. Performance: 800k rows × 80 columns processes in ~10 seconds with ~10GB memory usage.
 
 ## RESOLVED: Full State Mode Tombstone Records ✅
 
@@ -153,52 +153,18 @@ Improvement: 900x faster Python wrapper
 - **Future-Proof**: Adapts to different ID group counts and batch sizes
 - **Zero-Copy Performance**: Achieves intended near zero-copy Arrow performance
 
-## MAJOR MEMORY OPTIMIZATION: Chunked Processing ✅
+## Memory Optimization Approach
 
-### ✅ **ISSUE RESOLVED (2025-09-02)**
-Implemented chunked processing to solve extreme memory usage problems with large datasets.
+The algorithm has been optimized for memory usage through:
+- Arrow-direct hash computation (avoiding expensive serialization)
+- Batch consolidation (reducing Python conversion overhead)  
+- Adaptive parallelization (efficient use of multiple cores)
 
-### **Problem Solved:**
-- **Before**: 350k rows × 15 columns consumed 32GB+ memory and often crashed
-- **After**: Same dataset processes with only ~1GB memory usage using chunked approach
-- **Root Cause**: Massive intermediate `BitemporalRecord` creation and single-row batch proliferation
-
-### **Implementation Details:**
-1. **New Function**: `compute_changes_chunked()` with configurable chunk size (default 50k rows)
-2. **Chunked Processing**: Splits both current_state and updates into manageable chunks
-3. **Memory-Safe**: Each chunk processed independently with bounded memory usage
-4. **Result Consolidation**: Automatically merges and deduplicates results from all chunks
-5. **Backward Compatible**: Falls back to regular processing for small datasets
-
-### **Performance Results:**
-```
-Test Scenario: 350k current + 35k updates, 15 columns
-Regular (50k subset): 133MB memory increase, 0.73s
-Chunked (full 350k):   1024MB memory increase, 8.4s  
-Improvement: 30x+ memory reduction, handles full dataset
-```
-
-### **Usage:**
-```python
-import pytemporal
-
-# Use chunked processing for large datasets
-expire_indices, insert_batches, expired_batches = pytemporal.compute_changes_chunked(
-    current_batch, updates_batch, id_columns, value_columns,
-    system_date='2023-02-01', update_mode='delta', chunk_size=50000
-)
-```
-
-### **Optimal Chunk Sizes:**
-- **25k**: Slower but lowest memory usage
-- **50k**: Balanced performance and memory (recommended default)  
-- **75k-100k**: Fastest but higher memory usage
-- **Auto-selection**: Use regular processing for datasets < chunk_size
+**Note on Chunked Processing**: Chunking was investigated but determined to be fundamentally incompatible with bitemporal timeline processing. The algorithm requires processing each ID group's complete timeline together, as updates can affect multiple current state records across their effective period.
 
 ## Development Best Practices
 - Ensure to keep README.md up to date with changes to the code base or approach
-- **For Large Datasets**: Always use `compute_changes_chunked()` for datasets > 100k rows
-- **Memory Monitoring**: Test with realistic data sizes during development
-- ✅ **RESOLVED**: All critical issues resolved, memory optimized, and production-ready
+- **Memory Monitoring**: Test with realistic data sizes during development (~12MB per 1000 rows with 80 columns)
+- **Timestamp Flexibility**: The code now properly handles Date32, Date64, and all Timestamp types (Second/Millisecond/Microsecond/Nanosecond)
 
 This file should be updated whenever a new piece of context or information is added / discovered in this project

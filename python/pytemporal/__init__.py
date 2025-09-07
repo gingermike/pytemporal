@@ -1,9 +1,7 @@
 # Import the Rust extension module (it's a submodule now)
 from .pytemporal import (
     compute_changes, 
-    compute_changes_chunked, 
     compute_changes_with_hash_algorithm,
-    compute_changes_chunked_with_hash_algorithm,
     add_hash_key_with_algorithm
 )
 
@@ -15,8 +13,6 @@ __all__ = [
     'INFINITY_TIMESTAMP', 
     'compute_changes',
     'compute_changes_with_hash_algorithm',
-    'compute_changes_chunked',
-    'compute_changes_chunked_with_hash_algorithm',
     'add_hash_key',
     'add_hash_key_with_algorithm'
 ]

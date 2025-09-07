@@ -26,11 +26,50 @@ pub fn extract_date_as_datetime(array: &TimestampMicrosecondArray, idx: usize) -
 
 
 // Helper function to create a timestamp array from a NaiveDateTime with timezone support
+// This version always creates microsecond arrays - DEPRECATED, use create_timestamp_array_with_unit
 fn create_timestamp_array(datetime: NaiveDateTime, timezone: Option<String>) -> ArrayRef {
     let microseconds = (datetime - EPOCH).num_microseconds().unwrap();
     let values = vec![Some(microseconds)];
     let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone);
     Arc::new(array)
+}
+
+// Helper function to create a timestamp array with the correct time unit
+fn create_timestamp_array_with_unit(
+    datetime: NaiveDateTime, 
+    unit: &arrow::datatypes::TimeUnit,
+    timezone: Option<String>
+) -> ArrayRef {
+    use arrow::datatypes::TimeUnit;
+    
+    match unit {
+        TimeUnit::Second => {
+            let seconds = (datetime - EPOCH).num_seconds();
+            let values = vec![Some(seconds)];
+            let array = TimestampSecondArray::from(values).with_timezone_opt(timezone);
+            Arc::new(array)
+        }
+        TimeUnit::Millisecond => {
+            let millis = (datetime - EPOCH).num_milliseconds();
+            let values = vec![Some(millis)];
+            let array = TimestampMillisecondArray::from(values).with_timezone_opt(timezone);
+            Arc::new(array)
+        }
+        TimeUnit::Microsecond => {
+            let micros = (datetime - EPOCH).num_microseconds().unwrap();
+            let values = vec![Some(micros)];
+            let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone);
+            Arc::new(array)
+        }
+        TimeUnit::Nanosecond => {
+            let nanos = (datetime - EPOCH).num_nanoseconds()
+                .ok_or_else(|| "Timestamp overflow in nanosecond conversion")
+                .unwrap_or(i64::MAX); // Fallback to max value on overflow
+            let values = vec![Some(nanos)];
+            let array = TimestampNanosecondArray::from(values).with_timezone_opt(timezone);
+            Arc::new(array)
+        }
+    }
 }
 
 // Helper function to create a value hash array
@@ -54,28 +93,80 @@ fn build_temporal_columns(
         
         match column_name.as_str() {
             "effective_from" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                columns.push(create_timestamp_array(record.effective_from, timezone_str));
+                match field.data_type() {
+                    DataType::Timestamp(unit, tz) => {
+                        let timezone_str = tz.as_ref().map(|t| t.to_string());
+                        columns.push(create_timestamp_array_with_unit(record.effective_from, unit, timezone_str));
+                    }
+                    DataType::Date32 => {
+                        let days = (record.effective_from.date() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+                        let array = Date32Array::from(vec![Some(days)]);
+                        columns.push(Arc::new(array));
+                    }
+                    DataType::Date64 => {
+                        let millis = (record.effective_from - EPOCH).num_milliseconds();
+                        let array = Date64Array::from(vec![Some(millis)]);
+                        columns.push(Arc::new(array));
+                    }
+                    _ => return Err(format!("Unsupported data type for effective_from: {:?}", field.data_type()))
+                }
             }
             "effective_to" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                columns.push(create_timestamp_array(record.effective_to, timezone_str));
+                match field.data_type() {
+                    DataType::Timestamp(unit, tz) => {
+                        let timezone_str = tz.as_ref().map(|t| t.to_string());
+                        columns.push(create_timestamp_array_with_unit(record.effective_to, unit, timezone_str));
+                    }
+                    DataType::Date32 => {
+                        let days = (record.effective_to.date() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+                        let array = Date32Array::from(vec![Some(days)]);
+                        columns.push(Arc::new(array));
+                    }
+                    DataType::Date64 => {
+                        let millis = (record.effective_to - EPOCH).num_milliseconds();
+                        let array = Date64Array::from(vec![Some(millis)]);
+                        columns.push(Arc::new(array));
+                    }
+                    _ => return Err(format!("Unsupported data type for effective_to: {:?}", field.data_type()))
+                }
             }
             "as_of_from" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                columns.push(create_timestamp_array(record.as_of_from, timezone_str));
+                match field.data_type() {
+                    DataType::Timestamp(unit, tz) => {
+                        let timezone_str = tz.as_ref().map(|t| t.to_string());
+                        columns.push(create_timestamp_array_with_unit(record.as_of_from, unit, timezone_str));
+                    }
+                    DataType::Date32 => {
+                        let days = (record.as_of_from.date() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+                        let array = Date32Array::from(vec![Some(days)]);
+                        columns.push(Arc::new(array));
+                    }
+                    DataType::Date64 => {
+                        let millis = (record.as_of_from - EPOCH).num_milliseconds();
+                        let array = Date64Array::from(vec![Some(millis)]);
+                        columns.push(Arc::new(array));
+                    }
+                    _ => return Err(format!("Unsupported data type for as_of_from: {:?}", field.data_type()))
+                }
             }
             "as_of_to" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                columns.push(create_timestamp_array(record.as_of_to, timezone_str));
+                match field.data_type() {
+                    DataType::Timestamp(unit, tz) => {
+                        let timezone_str = tz.as_ref().map(|t| t.to_string());
+                        columns.push(create_timestamp_array_with_unit(record.as_of_to, unit, timezone_str));
+                    }
+                    DataType::Date32 => {
+                        let days = (record.as_of_to.date() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+                        let array = Date32Array::from(vec![Some(days)]);
+                        columns.push(Arc::new(array));
+                    }
+                    DataType::Date64 => {
+                        let millis = (record.as_of_to - EPOCH).num_milliseconds();
+                        let array = Date64Array::from(vec![Some(millis)]);
+                        columns.push(Arc::new(array));
+                    }
+                    _ => return Err(format!("Unsupported data type for as_of_to: {:?}", field.data_type()))
+                }
             }
             "value_hash" => {
                 columns.push(create_value_hash_array(&record.value_hash));
@@ -118,6 +209,66 @@ pub fn create_record_batch_from_update(
         .map_err(|e| e.to_string())
 }
 
+/// Helper function to create timestamp arrays for multiple records
+fn create_timestamp_array_for_records(
+    records: &[BitemporalRecord],
+    extract_fn: impl Fn(&BitemporalRecord) -> NaiveDateTime,
+    data_type: &DataType,
+) -> Result<ArrayRef, String> {
+    match data_type {
+        DataType::Timestamp(unit, tz) => {
+            let timezone_str = tz.as_ref().map(|t| t.to_string());
+            
+            match unit {
+                arrow::datatypes::TimeUnit::Second => {
+                    let values: Vec<Option<i64>> = records.iter()
+                        .map(|r| Some((extract_fn(r) - EPOCH).num_seconds()))
+                        .collect();
+                    let array = TimestampSecondArray::from(values).with_timezone_opt(timezone_str);
+                    Ok(Arc::new(array))
+                }
+                arrow::datatypes::TimeUnit::Millisecond => {
+                    let values: Vec<Option<i64>> = records.iter()
+                        .map(|r| Some((extract_fn(r) - EPOCH).num_milliseconds()))
+                        .collect();
+                    let array = TimestampMillisecondArray::from(values).with_timezone_opt(timezone_str);
+                    Ok(Arc::new(array))
+                }
+                arrow::datatypes::TimeUnit::Microsecond => {
+                    let values: Vec<Option<i64>> = records.iter()
+                        .map(|r| Some((extract_fn(r) - EPOCH).num_microseconds().unwrap()))
+                        .collect();
+                    let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                    Ok(Arc::new(array))
+                }
+                arrow::datatypes::TimeUnit::Nanosecond => {
+                    let values: Vec<Option<i64>> = records.iter()
+                        .map(|r| (extract_fn(r) - EPOCH).num_nanoseconds())
+                        .collect();
+                    let array = TimestampNanosecondArray::from(values).with_timezone_opt(timezone_str);
+                    Ok(Arc::new(array))
+                }
+            }
+        }
+        DataType::Date32 => {
+            let values: Vec<Option<i32>> = records.iter()
+                .map(|r| {
+                    let date = extract_fn(r).date();
+                    Some((date - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32)
+                })
+                .collect();
+            Ok(Arc::new(Date32Array::from(values)))
+        }
+        DataType::Date64 => {
+            let values: Vec<Option<i64>> = records.iter()
+                .map(|r| Some((extract_fn(r) - EPOCH).num_milliseconds()))
+                .collect();
+            Ok(Arc::new(Date64Array::from(values)))
+        }
+        _ => Err(format!("Unsupported date/timestamp type: {:?}", data_type))
+    }
+}
+
 /// Batch-oriented version that creates a single RecordBatch from multiple BitemporalRecords
 /// This avoids the overhead of creating many single-row batches
 pub fn create_record_batch_from_records(
@@ -140,52 +291,32 @@ pub fn create_record_batch_from_records(
         
         match column_name.as_str() {
             "effective_from" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                
-                let values: Vec<Option<i64>> = records.iter()
-                    .map(|record| Some((record.effective_from - EPOCH).num_microseconds().unwrap()))
-                    .collect();
-                
-                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
-                columns.push(Arc::new(array));
+                columns.push(create_timestamp_array_for_records(
+                    records,
+                    |r| r.effective_from,
+                    field.data_type()
+                )?);
             }
             "effective_to" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                
-                let values: Vec<Option<i64>> = records.iter()
-                    .map(|record| Some((record.effective_to - EPOCH).num_microseconds().unwrap()))
-                    .collect();
-                
-                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
-                columns.push(Arc::new(array));
+                columns.push(create_timestamp_array_for_records(
+                    records,
+                    |r| r.effective_to,
+                    field.data_type()
+                )?);
             }
             "as_of_from" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                
-                let values: Vec<Option<i64>> = records.iter()
-                    .map(|record| Some((record.as_of_from - EPOCH).num_microseconds().unwrap()))
-                    .collect();
-                
-                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
-                columns.push(Arc::new(array));
+                columns.push(create_timestamp_array_for_records(
+                    records,
+                    |r| r.as_of_from,
+                    field.data_type()
+                )?);
             }
             "as_of_to" => {
-                let timezone_str = if let DataType::Timestamp(_, tz) = field.data_type() {
-                    tz.as_ref().map(|t| t.to_string())
-                } else { None };
-                
-                let values: Vec<Option<i64>> = records.iter()
-                    .map(|record| Some((record.as_of_to - EPOCH).num_microseconds().unwrap()))
-                    .collect();
-                
-                let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
-                columns.push(Arc::new(array));
+                columns.push(create_timestamp_array_for_records(
+                    records,
+                    |r| r.as_of_to,
+                    field.data_type()
+                )?);
             }
             "value_hash" => {
                 let mut builder = StringBuilder::new();
@@ -451,23 +582,58 @@ pub fn create_expired_records_batch(
         if column_name == "as_of_to" {
             // Set as_of_to to the expiry timestamp for all records, matching the field's precision
             match field.data_type() {
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, tz) => {
+                DataType::Timestamp(unit, tz) => {
                     let timezone_str = tz.as_ref().map(|t| t.to_string());
-                    let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
-                    let values: Vec<Option<i64>> = expire_indices.iter()
-                        .map(|_| Some(microseconds))
-                        .collect();
-                    let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
-                    columns.push(Arc::new(array));
+                    
+                    match unit {
+                        arrow::datatypes::TimeUnit::Second => {
+                            let seconds = (expiry_timestamp - EPOCH).num_seconds();
+                            let values: Vec<Option<i64>> = expire_indices.iter()
+                                .map(|_| Some(seconds))
+                                .collect();
+                            let array = TimestampSecondArray::from(values).with_timezone_opt(timezone_str);
+                            columns.push(Arc::new(array));
+                        }
+                        arrow::datatypes::TimeUnit::Millisecond => {
+                            let millis = (expiry_timestamp - EPOCH).num_milliseconds();
+                            let values: Vec<Option<i64>> = expire_indices.iter()
+                                .map(|_| Some(millis))
+                                .collect();
+                            let array = TimestampMillisecondArray::from(values).with_timezone_opt(timezone_str);
+                            columns.push(Arc::new(array));
+                        }
+                        arrow::datatypes::TimeUnit::Microsecond => {
+                            let microseconds = (expiry_timestamp - EPOCH).num_microseconds().unwrap();
+                            let values: Vec<Option<i64>> = expire_indices.iter()
+                                .map(|_| Some(microseconds))
+                                .collect();
+                            let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str);
+                            columns.push(Arc::new(array));
+                        }
+                        arrow::datatypes::TimeUnit::Nanosecond => {
+                            let nanoseconds = (expiry_timestamp - EPOCH).num_nanoseconds()
+                                .unwrap_or(i64::MAX); // Handle overflow
+                            let values: Vec<Option<i64>> = expire_indices.iter()
+                                .map(|_| Some(nanoseconds))
+                                .collect();
+                            let array = TimestampNanosecondArray::from(values).with_timezone_opt(timezone_str);
+                            columns.push(Arc::new(array));
+                        }
+                    }
                 }
-                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, tz) => {
-                    let timezone_str = tz.as_ref().map(|t| t.to_string());
-                    let nanoseconds = (expiry_timestamp - EPOCH).num_nanoseconds().unwrap();
-                    let values: Vec<Option<i64>> = expire_indices.iter()
-                        .map(|_| Some(nanoseconds))
+                DataType::Date32 => {
+                    let days = (expiry_timestamp.date() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+                    let values: Vec<Option<i32>> = expire_indices.iter()
+                        .map(|_| Some(days))
                         .collect();
-                    let array = TimestampNanosecondArray::from(values).with_timezone_opt(timezone_str);
-                    columns.push(Arc::new(array));
+                    columns.push(Arc::new(Date32Array::from(values)));
+                }
+                DataType::Date64 => {
+                    let millis = (expiry_timestamp - EPOCH).num_milliseconds();
+                    let values: Vec<Option<i64>> = expire_indices.iter()
+                        .map(|_| Some(millis))
+                        .collect();
+                    columns.push(Arc::new(Date64Array::from(values)));
                 }
                 _ => return Err(format!("Unexpected data type for as_of_to: {:?}", field.data_type()))
             }
