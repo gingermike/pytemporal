@@ -1,0 +1,16 @@
+<svg width="1400" height="400" viewBox="0 0 1400 400" xmlns="http://www.w3.org/2000/svg">
+  <!-- Large version of the layered logo - designed for 400px height display -->
+  
+  <!-- Bottom layer (as-of time) -->
+  <rect x="75" y="225" width="200" height="40" fill="#94a3b8" rx="20"/>
+  
+  <!-- Middle layer (intersection) -->
+  <rect x="100" y="175" width="200" height="40" fill="#3b82f6" rx="20"/>
+  
+  <!-- Top layer (effective time) -->
+  <rect x="125" y="125" width="200" height="40" fill="#1d4ed8" rx="20"/>
+  
+  <!-- Typography - large and crisp -->
+  <text x="375" y="200" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" 
+        font-size="120" font-weight="600" fill="#1f2937" dominant-baseline="middle">PyTemporal</text>
+</svg>
