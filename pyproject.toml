@@ -32,14 +32,6 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-[project.urls]
-Homepage = "https://github.com/gingermike/pytemporal"
-Repository = "https://github.com/gingermike/pytemporal"
-Documentation = "https://gingermike.github.io/pytemporal/"
-Changelog = "https://github.com/gingermike/pytemporal/blob/main/CHANGELOG.md"
-"Issue Tracker" = "https://github.com/gingermike/pytemporal/issues"
-"Performance Benchmarks" = "https://gingermike.github.io/pytemporal/"
-
 dependencies = [
     "pyarrow>=14.0.0",
     "pandas>=2.0.0",
@@ -47,6 +39,14 @@ dependencies = [
     "arro3-core",
     "psutil>=7.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gingermike/pytemporal"
+Repository = "https://github.com/gingermike/pytemporal"
+Documentation = "https://gingermike.github.io/pytemporal/"
+Changelog = "https://github.com/gingermike/pytemporal/blob/main/CHANGELOG.md"
+"Issue Tracker" = "https://github.com/gingermike/pytemporal/issues"
+"Performance Benchmarks" = "https://gingermike.github.io/pytemporal/"
 
 [project.optional-dependencies]
 dev = [
