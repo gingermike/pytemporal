@@ -2,6 +2,13 @@
 name = "pytemporal"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "High-performance bitemporal data processing for Python"
+homepage = "https://github.com/gingermike/pytemporal"
+repository = "https://github.com/gingermike/pytemporal"
+keywords = ["bitemporal", "timeseries", "data-processing", "temporal", "analytics"]
+categories = ["algorithms", "data-structures", "database"]
+authors = ["PyTemporal Contributors"]
 
 [dependencies]
 arrow = "53.4"

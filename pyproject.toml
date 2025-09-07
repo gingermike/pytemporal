@@ -5,9 +5,32 @@ build-backend = "maturin"
 [project]
 name = "pytemporal"
 version = "0.1.0"
-description = "High-performance bitemporal timeseries update processor"
+description = "High-performance bitemporal data processing for Python"
 readme = "README.md"
 requires-python = ">=3.9"
+license = {text = "MIT OR Apache-2.0"}
+authors = [
+    {name = "PyTemporal Contributors"},
+]
+keywords = ["bitemporal", "timeseries", "data-processing", "temporal", "analytics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "pyarrow>=14.0.0",
     "pandas>=2.0.0",
