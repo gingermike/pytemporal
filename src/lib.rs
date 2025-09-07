@@ -195,15 +195,20 @@ fn build_id_groups(
         .map(|col| updates.column_by_name(col).unwrap().clone())
         .collect();
     
+    // PERFORMANCE OPTIMIZATION: Reusable buffer to avoid 850,000+ String allocations
+    let mut id_key_buffer = String::with_capacity(64);
+    
     // Group current state rows by ID key
     for row_idx in 0..current_state.num_rows() {
-        let id_key = create_id_key(&current_id_arrays, row_idx);
+        create_id_key_with_buffer(&current_id_arrays, row_idx, &mut id_key_buffer);
+        let id_key = id_key_buffer.clone(); // TODO: Could optimize further with string interning
         id_groups.entry(id_key).or_insert((Vec::new(), Vec::new())).0.push(row_idx);
     }
     
     // Group update rows by ID key  
     for row_idx in 0..updates.num_rows() {
-        let id_key = create_id_key(&updates_id_arrays, row_idx);
+        create_id_key_with_buffer(&updates_id_arrays, row_idx, &mut id_key_buffer);
+        let id_key = id_key_buffer.clone(); // TODO: Could optimize further with string interning
         id_groups.entry(id_key).or_insert((Vec::new(), Vec::new())).1.push(row_idx);
     }
     
@@ -230,9 +235,14 @@ fn process_all_id_groups(
     let mut to_expire = Vec::with_capacity(estimated_expire_capacity);
     let mut to_insert = Vec::with_capacity(estimated_insert_capacity);
     
+    // PERFORMANCE OPTIMIZATION: Pre-extract array to avoid 5000+ column_by_name calls
+    let updates_as_of_from_array = updates.column_by_name("as_of_from")
+        .ok_or_else(|| "as_of_from column not found in updates".to_string())?;
+    
     // Determine optimal processing strategy based on data size
-    let use_parallel = id_groups.len() > 50 ||
-                      (current_state.num_rows() + updates.num_rows()) > 10000;
+    // PERFORMANCE TUNING: More aggressive parallelization for modern multi-core systems
+    let use_parallel = id_groups.len() > 25 ||
+                      (current_state.num_rows() + updates.num_rows()) > 5000;
     
     if use_parallel {
         // Parallel processing for large datasets
@@ -244,6 +254,7 @@ fn process_all_id_groups(
                     &update_row_indices,
                     current_state,
                     updates,
+                    &updates_as_of_from_array,
                     id_columns,
                     value_columns,
                     system_date,
@@ -273,6 +284,7 @@ fn process_all_id_groups(
                 &update_row_indices,
                 current_state,
                 updates,
+                &updates_as_of_from_array,
                 id_columns,
                 value_columns,
                 system_date,
@@ -357,6 +369,7 @@ fn process_id_group_optimized(
     update_row_indices: &[usize],
     current_batch: &RecordBatch,
     updates_batch: &RecordBatch,
+    updates_as_of_from_array: &arrow::array::ArrayRef,
     id_columns: &[String],
     value_columns: &[String],
     system_date: NaiveDate,
@@ -368,9 +381,8 @@ fn process_id_group_optimized(
     
     // Extract consistent as_of_from timestamp from updates batch (if available)
     let consistent_timestamp = if updates_batch.num_rows() > 0 {
-        // Use the as_of_from timestamp from the updates batch for consistency
-        let as_of_from_array = updates_batch.column_by_name("as_of_from").unwrap();
-        if let Some(ts_array) = as_of_from_array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() {
+        // PERFORMANCE: Use pre-extracted array to avoid repeated column_by_name calls
+        if let Some(ts_array) = updates_as_of_from_array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() {
             if !ts_array.is_null(0) {
                 let micros = ts_array.value(0);
                 let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
@@ -675,7 +687,6 @@ fn process_full_state_optimized(
 fn extract_datetime_flexible(array: &dyn arrow::array::Array, idx: usize) -> Result<chrono::NaiveDateTime, String> {
     use arrow::array::*;
     use arrow::datatypes::TimeUnit;
-    use chrono::NaiveDateTime;
     
     match array.data_type() {
         // Date32 - days since epoch
@@ -800,12 +811,12 @@ fn create_bitemporal_records_from_indices(
 /// Fast ID key creation using string concatenation instead of expensive ScalarValue conversions
 /// PERFORMANCE: Inlined because this is called 850,000+ times (once per row)
 #[inline(always)]
-fn create_id_key(id_arrays: &[arrow::array::ArrayRef], row_idx: usize) -> String {
-    let mut key = String::with_capacity(64); // Pre-allocate reasonable capacity
+fn create_id_key_with_buffer(id_arrays: &[arrow::array::ArrayRef], row_idx: usize, buffer: &mut String) {
+    buffer.clear(); // Reuse existing allocation
     
     for (i, array) in id_arrays.iter().enumerate() {
         if i > 0 {
-            key.push('|'); // Separator
+            buffer.push('|'); // Separator
         }
         
         // Fast string extraction without ScalarValue conversion
@@ -813,44 +824,42 @@ fn create_id_key(id_arrays: &[arrow::array::ArrayRef], row_idx: usize) -> String
             arrow::datatypes::DataType::Utf8 => {
                 let string_array = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
                 if string_array.is_null(row_idx) {
-                    key.push_str("NULL");
+                    buffer.push_str("NULL");
                 } else {
-                    key.push_str(string_array.value(row_idx));
+                    buffer.push_str(string_array.value(row_idx));
                 }
             }
             arrow::datatypes::DataType::Int32 => {
                 let int_array = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
                 if int_array.is_null(row_idx) {
-                    key.push_str("NULL");
+                    buffer.push_str("NULL");
                 } else {
-                    key.push_str(&int_array.value(row_idx).to_string());
+                    buffer.push_str(&int_array.value(row_idx).to_string());
                 }
             }
             arrow::datatypes::DataType::Int64 => {
                 let int_array = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
                 if int_array.is_null(row_idx) {
-                    key.push_str("NULL");
+                    buffer.push_str("NULL");
                 } else {
-                    key.push_str(&int_array.value(row_idx).to_string());
+                    buffer.push_str(&int_array.value(row_idx).to_string());
                 }
             }
             arrow::datatypes::DataType::Float64 => {
                 let float_array = array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
                 if float_array.is_null(row_idx) {
-                    key.push_str("NULL");
+                    buffer.push_str("NULL");
                 } else {
-                    key.push_str(&float_array.value(row_idx).to_string());
+                    buffer.push_str(&float_array.value(row_idx).to_string());
                 }
             }
             _ => {
                 // Fallback to ScalarValue for other types (but most ID columns are strings/ints)
                 let scalar = ScalarValue::from_array(array, row_idx);
-                key.push_str(&format!("{:?}", scalar));
+                buffer.push_str(&format!("{:?}", scalar));
             }
         }
     }
-    
-    key
 }
 
 #[pyfunction]

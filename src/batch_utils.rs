@@ -25,14 +25,7 @@ pub fn extract_date_as_datetime(array: &TimestampMicrosecondArray, idx: usize) -
 }
 
 
-// Helper function to create a timestamp array from a NaiveDateTime with timezone support
-// This version always creates microsecond arrays - DEPRECATED, use create_timestamp_array_with_unit
-fn create_timestamp_array(datetime: NaiveDateTime, timezone: Option<String>) -> ArrayRef {
-    let microseconds = (datetime - EPOCH).num_microseconds().unwrap();
-    let values = vec![Some(microseconds)];
-    let array = TimestampMicrosecondArray::from(values).with_timezone_opt(timezone);
-    Arc::new(array)
-}
+// Removed deprecated create_timestamp_array function - use create_timestamp_array_with_unit instead
 
 // Helper function to create a timestamp array with the correct time unit
 fn create_timestamp_array_with_unit(
