@@ -1,0 +1,17 @@
+<svg width="200" height="80" viewBox="0 0 200 80" xmlns="http://www.w3.org/2000/svg">
+  <!-- Layered/stacked design suggesting temporal dimensions -->
+  <!-- Inspired by the concept of temporal layers in bitemporal data -->
+  
+  <!-- Bottom layer (as-of time) -->
+  <rect x="15" y="45" width="40" height="8" fill="#94a3b8" rx="4"/>
+  
+  <!-- Middle layer (intersection) -->
+  <rect x="20" y="35" width="40" height="8" fill="#3b82f6" rx="4"/>
+  
+  <!-- Top layer (effective time) -->
+  <rect x="25" y="25" width="40" height="8" fill="#1d4ed8" rx="4"/>
+  
+  <!-- Typography - centered vertically with the bars (bars span y=25 to y=53, center is y=39) -->
+  <text x="75" y="40" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" 
+        font-size="24" font-weight="600" fill="#1f2937" dominant-baseline="middle">PyTemporal</text>
+</svg>
