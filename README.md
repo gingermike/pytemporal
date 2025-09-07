@@ -1,4 +1,4 @@
-# <img src="docs/logo_layers_compact.svg" alt="PyTemporal" height="32" style="vertical-align: middle;"> PyTemporal
+# <img src="docs/logo_compact.svg" alt="PyTemporal" height="200" style="vertical-align: middle;"> 
 
 **High-performance bitemporal data processing for Python**
 
