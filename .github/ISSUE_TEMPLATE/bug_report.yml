@@ -1,0 +1,135 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in PyTemporal
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the sections below to help us understand and reproduce the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Please provide a minimal code example that reproduces the issue
+      placeholder: |
+        ```python
+        import pytemporal
+        
+        # Your code that reproduces the bug
+        processor = pytemporal.BitemporalTimeseriesProcessor(...)
+        # ...
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: I expected...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+      placeholder: Instead, what happened was...
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error Output
+      description: If applicable, include the full error traceback
+      placeholder: |
+        Traceback (most recent call last):
+          File "example.py", line 1, in <module>
+            ...
+        Error: ...
+      render: text
+
+  - type: input
+    id: pytemporal-version
+    attributes:
+      label: PyTemporal Version
+      description: Which version of PyTemporal are you using?
+      placeholder: "Run: pip show pytemporal"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: Which Python version are you using?
+      placeholder: "Run: python --version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other (please specify in additional context)
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Relevant Dependencies
+      description: List versions of key dependencies (pandas, pyarrow, numpy)
+      placeholder: |
+        pandas: 2.1.0
+        pyarrow: 14.0.0
+        numpy: 1.24.0
+
+  - type: textarea
+    id: data-characteristics
+    attributes:
+      label: Data Characteristics
+      description: If relevant, describe your dataset size, schema, and temporal patterns
+      placeholder: |
+        - Dataset size: 100k rows
+        - Columns: 5 ID columns, 10 value columns
+        - Temporal range: 2020-2025
+        - Update frequency: Daily
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem (performance impact, workarounds, etc.)
+      placeholder: Additional details...
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have included a minimal code example that reproduces the issue
+          required: true
+        - label: I have included relevant error outputs and version information
+          required: true

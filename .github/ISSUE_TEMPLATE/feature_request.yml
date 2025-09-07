@@ -1,0 +1,142 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for PyTemporal
+title: "[FEATURE] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please fill out the sections below to help us understand your request.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature Summary
+      description: A brief summary of the feature you'd like to see
+      placeholder: Add support for...
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? What use case does it enable?
+      placeholder: |
+        Currently, PyTemporal doesn't support...
+        This makes it difficult to...
+        My use case requires...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this feature to work?
+      placeholder: |
+        I propose adding a new method/parameter/feature that...
+        The API could look like:
+        ```python
+        # Example usage
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What alternative solutions or workarounds have you considered?
+      placeholder: |
+        I considered using...
+        Current workaround is...
+        Other libraries handle this by...
+
+  - type: dropdown
+    id: feature-type
+    attributes:
+      label: Feature Type
+      description: What type of feature is this?
+      options:
+        - New API method/parameter
+        - Performance improvement
+        - New data type support
+        - Enhanced error handling
+        - Documentation improvement
+        - Developer experience
+        - Other (please specify)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature for your use case?
+      options:
+        - Critical - Blocking my project
+        - High - Would significantly improve my workflow
+        - Medium - Nice to have
+        - Low - Minor improvement
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Detailed Use Case
+      description: Provide a detailed example of how this feature would be used
+      placeholder: |
+        In my application, I need to...
+        The data looks like...
+        The expected workflow is...
+
+  - type: textarea
+    id: performance-impact
+    attributes:
+      label: Performance Considerations
+      description: Any thoughts on how this feature might impact PyTemporal's performance?
+      placeholder: |
+        This feature might affect performance by...
+        Expected performance characteristics...
+        Acceptable trade-offs...
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility Impact
+    attributes:
+      description: Would this feature require breaking changes to existing APIs?
+      placeholder: |
+        This would be backwards compatible because...
+        OR
+        This would require breaking changes to...
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other context, mockups, examples, or references?
+      placeholder: |
+        Similar features in other libraries:
+        - Library X does this by...
+        - Reference implementation: ...
+        
+        Additional considerations:
+        - ...
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to ensure this feature hasn't been requested
+          required: true
+        - label: This feature aligns with PyTemporal's focus on bitemporal data processing
+          required: true
+        - label: I have provided a clear use case and problem statement
+          required: true
+        - label: I am willing to help test this feature if implemented
+          required: false

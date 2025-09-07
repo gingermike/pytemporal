@@ -1,0 +1,181 @@
+name: Performance Issue
+description: Report performance problems or unexpected slowdowns
+title: "[PERFORMANCE] "
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a performance issue! PyTemporal targets world-class performance (157k+ rows/sec), so we take performance seriously.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Performance Issue Description
+      description: Describe the performance problem you're experiencing
+      placeholder: |
+        PyTemporal is slower than expected when...
+        Processing time is much longer than benchmarks suggest...
+        Memory usage is unexpectedly high...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Code
+      description: Please provide code that demonstrates the performance issue
+      placeholder: |
+        ```python
+        import time
+        import pytemporal
+        
+        # Setup code
+        processor = pytemporal.BitemporalTimeseriesProcessor(...)
+        
+        # Performance measurement
+        start_time = time.time()
+        result = processor.process_updates(current_state, updates, system_date)
+        end_time = time.time()
+        
+        print(f"Processing took {end_time - start_time:.3f} seconds")
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: performance-metrics
+    attributes:
+      label: Performance Metrics
+      description: Provide specific performance measurements
+      placeholder: |
+        Dataset size: 100k rows, 20 columns
+        Processing time: 15.2 seconds (expected ~0.6 seconds based on benchmarks)
+        Memory usage: 25GB (expected ~2GB)
+        Throughput: 6.6k rows/sec (expected 167k rows/sec)
+    validations:
+      required: true
+
+  - type: textarea
+    id: dataset-characteristics
+    attributes:
+      label: Dataset Characteristics
+      description: Describe your data structure and size
+      placeholder: |
+        - Total records: 500k current + 50k updates
+        - ID columns: ['customer_id', 'product_id'] (cardinality: 10k customers, 500 products)
+        - Value columns: 15 numeric columns (price, quantity, etc.)
+        - Temporal range: 2020-2025 (5 years)
+        - Update patterns: Daily batch updates
+        - Data types: Float64, Date32, TimestampMicrosecond
+    validations:
+      required: true
+
+  - type: dropdown
+    id: performance-type
+    attributes:
+      label: Performance Issue Type
+      description: What type of performance issue are you experiencing?
+      options:
+        - Slower than expected processing time
+        - Higher than expected memory usage
+        - Poor scaling with dataset size
+        - Performance regression from previous version
+        - Memory leak or growing usage over time
+        - Other (please specify in description)
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Details
+      description: System specifications and environment information
+      placeholder: |
+        OS: Linux Ubuntu 22.04
+        CPU: Intel i7-9750H (6 cores, 12 threads)
+        RAM: 32GB
+        Python: 3.11.0
+        PyTemporal: 0.1.0
+        pandas: 2.1.0
+        pyarrow: 14.0.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: benchmarking
+    attributes:
+      label: Performance Comparison
+      description: How does your performance compare to PyTemporal's benchmarks?
+      placeholder: |
+        Expected performance (from PyTemporal benchmarks):
+        - Medium dataset (100 records): ~170µs
+        - My dataset (100k records): ~0.6s (estimated scaling)
+        
+        Actual performance:
+        - My dataset (100k records): 15.2s
+        
+        Performance gap: 25x slower than expected
+
+  - type: textarea
+    id: profiling
+    attributes:
+      label: Profiling Information
+      description: Any profiling data or performance analysis you've done
+      placeholder: |
+        I ran cProfile and found:
+        - Most time spent in: ...
+        - Memory profiling shows: ...
+        - System monitoring indicates: ...
+        
+        If you have flamegraphs or other profiling data, please attach them.
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: PyTemporal Configuration
+      description: How are you configuring PyTemporal?
+      placeholder: |
+        processor = BitemporalTimeseriesProcessor(
+            id_columns=['customer_id', 'product_id'],
+            value_columns=['price', 'quantity', ...],
+            hash_algorithm='xxhash',  # or 'sha256'
+            mode='delta'  # or 'full_state'
+        )
+
+  - type: textarea
+    id: workarounds
+    attributes:
+      label: Attempted Solutions
+      description: What have you tried to improve performance?
+      placeholder: |
+        I've tried:
+        - Reducing dataset size: ...
+        - Different hash algorithms: ...
+        - Different processing modes: ...
+        - System tuning: ...
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+      placeholder: |
+        - This worked faster in previous versions: ...
+        - Performance varies with different data patterns: ...
+        - Related issues or discussions: ...
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have provided specific performance measurements
+          required: true
+        - label: I have included dataset characteristics and environment details
+          required: true
+        - label: I have compared against PyTemporal's published benchmarks
+          required: true
+        - label: I have searched existing issues for similar performance problems
+          required: true
