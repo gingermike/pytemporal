@@ -134,6 +134,7 @@ fn bench_small_dataset(c: &mut Criterion) {
                 black_box(value_columns.clone()),
                 black_box(system_date),
                 black_box(UpdateMode::Delta),
+                black_box(false),
             ).unwrap())
         })
     });
@@ -185,6 +186,7 @@ fn bench_medium_dataset(c: &mut Criterion) {
                 black_box(value_columns.clone()),
                 black_box(system_date),
                 black_box(UpdateMode::Delta),
+                black_box(false),
             ).unwrap())
         })
     });
@@ -217,6 +219,7 @@ fn bench_conflation_effectiveness(c: &mut Criterion) {
                 black_box(value_columns.clone()),
                 black_box(system_date),
                 black_box(UpdateMode::Delta),
+                black_box(false),
             ).unwrap())
         })
     });
@@ -281,6 +284,7 @@ fn bench_scaling_by_size(c: &mut Criterion) {
                     black_box(value_columns.clone()),
                     black_box(system_date),
                     black_box(UpdateMode::Delta),
+                    black_box(false),
                 ).unwrap())
             })
         });
@@ -347,6 +351,7 @@ fn bench_parallel_effectiveness(c: &mut Criterion) {
                     black_box(value_columns.clone()),
                     black_box(system_date),
                     black_box(UpdateMode::Delta),
+                    black_box(false),
                 ).unwrap())
             })
         });
