@@ -8,7 +8,16 @@ import pytest
 
 from pytemporal import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
 
-from tests.scenarios.conflation import conflation
+from tests.scenarios.conflation import (
+    conflation,
+    conflation_three_segments,
+    conflation_partial,
+    conflation_non_consecutive,
+    conflation_mixed_ids,
+    conflation_unsorted_input,
+    conflation_with_current_state,
+    conflation_different_fields
+)
 from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
     append_head_exact, intersect, no_change, full_state_basic, full_state_delete
 from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \
@@ -40,7 +49,14 @@ scenarios = [
     no_change_with_intersection,
 
     #conflation
-    conflation
+    conflation,
+    conflation_three_segments,
+    conflation_partial,
+    conflation_non_consecutive,
+    conflation_mixed_ids,
+    conflation_unsorted_input,
+    conflation_with_current_state,
+    conflation_different_fields
 ]
 
 
@@ -64,8 +80,8 @@ def test_update_scenarios(current_state: List,
     current_state_df = pd.DataFrame(current_state, columns=default_columns)
     updates_df = pd.DataFrame(updates, columns=default_columns)
 
-    # Enable conflation for the conflation scenario
-    conflate_inputs = (scenario_id == "conflation")
+    # Enable conflation for all conflation scenarios
+    conflate_inputs = scenario_id.startswith("conflation")
 
     # Act
     expire, insert = processor.compute_changes(
