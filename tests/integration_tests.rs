@@ -150,6 +150,7 @@ fn run_scenario(scenario: &TestScenario) {
         vec!["mv".to_string(), "price".to_string()],
         system_date,
         UpdateMode::Delta,
+        false, // conflate_inputs
     ).unwrap();
 
     // Extract actual results

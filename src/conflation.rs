@@ -1,8 +1,9 @@
 use crate::types::*;
 use crate::batch_utils::extract_date_as_datetime;
-use arrow::array::{RecordBatch, TimestampMicrosecondArray, TimestampNanosecondArray, StringArray, ArrayRef};
+use arrow::array::{RecordBatch, TimestampMicrosecondArray, TimestampNanosecondArray, StringArray, ArrayRef, Array};
 use arrow::datatypes::{DataType, Schema, Field};
 use std::sync::Arc;
+use std::collections::HashMap;
 use chrono::NaiveDateTime;
 
 /// Extract timestamp from any timestamp array type
@@ -205,6 +206,216 @@ pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<Recor
     }
     
     Ok(deduped)
+}
+
+/// Conflate consecutive input update records with same ID and value hash
+/// This merges rows that have:
+/// - Same ID column values
+/// - Same value_hash
+/// - Consecutive effective dates (row[i].effective_to == row[i+1].effective_from)
+pub fn conflate_input_updates(updates: RecordBatch, id_columns: &[String]) -> Result<RecordBatch, String> {
+    // Handle edge cases
+    if updates.num_rows() <= 1 {
+        return Ok(updates);
+    }
+
+    // Extract necessary columns
+    let effective_from_col = updates.column_by_name("effective_from")
+        .ok_or_else(|| "Missing effective_from column".to_string())?;
+    let effective_to_col = updates.column_by_name("effective_to")
+        .ok_or_else(|| "Missing effective_to column".to_string())?;
+    let value_hash_col = updates.column_by_name("value_hash")
+        .ok_or_else(|| "Missing value_hash column".to_string())?
+        .as_any().downcast_ref::<StringArray>()
+        .ok_or_else(|| "value_hash must be StringArray".to_string())?;
+
+    // Extract ID columns
+    let mut id_arrays: Vec<ArrayRef> = Vec::new();
+    for id_col in id_columns {
+        let array = updates.column_by_name(id_col)
+            .ok_or_else(|| format!("Missing ID column: {}", id_col))?;
+        id_arrays.push(array.clone());
+    }
+
+    // Build row information: (row_idx, id_key, effective_from, effective_to, value_hash)
+    #[derive(Clone)]
+    struct RowInfo {
+        row_idx: usize,
+        id_key: String,
+        effective_from: NaiveDateTime,
+        effective_to: NaiveDateTime,
+        value_hash: String,
+    }
+
+    let mut rows: Vec<RowInfo> = Vec::new();
+    let mut buffer = String::with_capacity(64);
+
+    for row_idx in 0..updates.num_rows() {
+        // Create ID key
+        buffer.clear();
+        for (i, array) in id_arrays.iter().enumerate() {
+            if i > 0 {
+                buffer.push('|');
+            }
+            match array.data_type() {
+                DataType::Utf8 => {
+                    let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+                    if string_array.is_null(row_idx) {
+                        buffer.push_str("NULL");
+                    } else {
+                        buffer.push_str(string_array.value(row_idx));
+                    }
+                }
+                DataType::Int32 => {
+                    let int_array = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                    if int_array.is_null(row_idx) {
+                        buffer.push_str("NULL");
+                    } else {
+                        buffer.push_str(&int_array.value(row_idx).to_string());
+                    }
+                }
+                DataType::Int64 => {
+                    let int_array = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                    if int_array.is_null(row_idx) {
+                        buffer.push_str("NULL");
+                    } else {
+                        buffer.push_str(&int_array.value(row_idx).to_string());
+                    }
+                }
+                _ => {
+                    // Fallback to ScalarValue for other types
+                    let scalar = ScalarValue::from_array(array, row_idx);
+                    buffer.push_str(&format!("{:?}", scalar));
+                }
+            }
+        }
+        let id_key = buffer.clone();
+
+        // Extract timestamps
+        let effective_from = extract_timestamp_as_datetime(effective_from_col, row_idx)?;
+        let effective_to = extract_timestamp_as_datetime(effective_to_col, row_idx)?;
+        let value_hash = value_hash_col.value(row_idx).to_string();
+
+        rows.push(RowInfo {
+            row_idx,
+            id_key,
+            effective_from,
+            effective_to,
+            value_hash,
+        });
+    }
+
+    // Group by ID key
+    let mut id_groups: HashMap<String, Vec<RowInfo>> = HashMap::new();
+    for row in rows {
+        id_groups.entry(row.id_key.clone()).or_insert_with(Vec::new).push(row);
+    }
+
+    // Process each ID group: sort and identify rows to keep
+    let mut rows_to_keep: Vec<usize> = Vec::new();
+    let mut rows_to_extend: HashMap<usize, NaiveDateTime> = HashMap::new(); // row_idx -> new effective_to
+
+    for (_id_key, mut group) in id_groups {
+        // Sort by effective_from
+        group.sort_by(|a, b| a.effective_from.cmp(&b.effective_from));
+
+        let mut i = 0;
+        while i < group.len() {
+            let mut segment_end = i;
+
+            // Find consecutive rows with same value_hash
+            while segment_end + 1 < group.len() {
+                let current = &group[segment_end];
+                let next = &group[segment_end + 1];
+
+                // Check if consecutive (same value_hash and adjacent dates)
+                if current.value_hash == next.value_hash && current.effective_to == next.effective_from {
+                    segment_end += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Keep the first row of the segment
+            let first_row_idx = group[i].row_idx;
+            rows_to_keep.push(first_row_idx);
+
+            // If we merged multiple rows, extend the effective_to
+            if segment_end > i {
+                let last_effective_to = group[segment_end].effective_to;
+                rows_to_extend.insert(first_row_idx, last_effective_to);
+            }
+
+            i = segment_end + 1;
+        }
+    }
+
+    // Sort rows to keep by original index to maintain order
+    rows_to_keep.sort_unstable();
+
+    // Build new RecordBatch with selected rows and extended effective_to where needed
+    let schema = updates.schema();
+    let mut new_columns: Vec<ArrayRef> = Vec::new();
+
+    for field in schema.fields() {
+        let col_name = field.name();
+        let original_col = updates.column_by_name(col_name).unwrap();
+
+        if col_name == "effective_to" {
+            // Build effective_to column with extensions
+            let mut values: Vec<Option<i64>> = Vec::new();
+            let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+
+            for &row_idx in &rows_to_keep {
+                let effective_to = if let Some(new_to) = rows_to_extend.get(&row_idx) {
+                    *new_to
+                } else {
+                    extract_timestamp_as_datetime(effective_to_col, row_idx)?
+                };
+                let microseconds = (effective_to - epoch).num_microseconds().unwrap();
+                values.push(Some(microseconds));
+            }
+
+            // Match the original field's data type and timezone
+            let array: ArrayRef = match field.data_type() {
+                DataType::Timestamp(unit, tz) => {
+                    let timezone_str = tz.as_ref().map(|t| t.to_string());
+                    use arrow::datatypes::TimeUnit;
+
+                    match unit {
+                        TimeUnit::Microsecond => {
+                            Arc::new(TimestampMicrosecondArray::from(values).with_timezone_opt(timezone_str))
+                        }
+                        TimeUnit::Nanosecond => {
+                            // Convert microseconds to nanoseconds
+                            let nanos: Vec<Option<i64>> = values.iter()
+                                .map(|&v| v.map(|us| us * 1000))
+                                .collect();
+                            Arc::new(TimestampNanosecondArray::from(nanos).with_timezone_opt(timezone_str))
+                        }
+                        _ => {
+                            return Err(format!("Unsupported timestamp unit for effective_to: {:?}", unit));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(format!("Expected Timestamp type for effective_to, got {:?}", field.data_type()));
+                }
+            };
+            new_columns.push(array);
+        } else {
+            // Copy selected rows from original column
+            let indices = arrow::array::UInt32Array::from(
+                rows_to_keep.iter().map(|&i| i as u32).collect::<Vec<u32>>()
+            );
+            let selected = arrow::compute::take(original_col, &indices, None)
+                .map_err(|e| format!("Failed to select rows: {}", e))?;
+            new_columns.push(selected);
+        }
+    }
+
+    RecordBatch::try_new(schema, new_columns)
+        .map_err(|e| format!("Failed to create conflated RecordBatch: {}", e))
 }
 
 /// Consolidate multiple RecordBatches into fewer large batches to reduce Python conversion overhead

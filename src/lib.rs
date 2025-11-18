@@ -35,7 +35,7 @@ impl HashAlgorithm {
 
 pub use types::*;
 use timeline::process_id_timeline;
-use conflation::{deduplicate_record_batches, simple_conflate_batches, consolidate_final_batches};
+use conflation::{deduplicate_record_batches, simple_conflate_batches, consolidate_final_batches, conflate_input_updates};
 
 /// Type alias for processing results from ID groups
 type IdGroupProcessingResult = (Vec<usize>, Vec<RecordBatch>);
@@ -49,8 +49,9 @@ pub fn process_updates(
     value_columns: Vec<String>,
     system_date: NaiveDate,
     update_mode: UpdateMode,
+    conflate_inputs: bool,
 ) -> Result<ChangeSet, String> {
-    process_updates_with_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, HashAlgorithm::default())
+    process_updates_with_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, HashAlgorithm::default(), conflate_inputs)
 }
 
 pub fn process_updates_with_algorithm(
@@ -61,12 +62,13 @@ pub fn process_updates_with_algorithm(
     system_date: NaiveDate,
     update_mode: UpdateMode,
     algorithm: HashAlgorithm,
+    conflate_inputs: bool,
 ) -> Result<ChangeSet, String> {
     let start_time = std::time::Instant::now();
-    
-    // Phase 0: Input validation and preprocessing 
+
+    // Phase 0: Input validation and preprocessing
     let (current_state, updates, batch_timestamp) = prepare_inputs(
-        current_state, updates, &value_columns, algorithm
+        current_state, updates, &value_columns, algorithm, &id_columns, conflate_inputs
     )?;
     
     // Handle quick paths for empty inputs
@@ -107,14 +109,21 @@ fn prepare_inputs(
     updates: RecordBatch,
     value_columns: &[String],
     algorithm: HashAlgorithm,
+    id_columns: &[String],
+    conflate_inputs: bool,
 ) -> Result<(RecordBatch, RecordBatch, chrono::NaiveDateTime), String> {
-    // Ensure value_hash columns are computed if missing or empty  
+    // Ensure value_hash columns are computed if missing or empty
     let current_state = ensure_hash_column_with_algorithm(current_state, value_columns, algorithm)?;
-    let updates = ensure_hash_column_with_algorithm(updates, value_columns, algorithm)?;
-    
+    let mut updates = ensure_hash_column_with_algorithm(updates, value_columns, algorithm)?;
+
+    // Optionally conflate consecutive input updates with same ID and value hash
+    if conflate_inputs && updates.num_rows() > 1 {
+        updates = conflate_input_updates(updates, id_columns)?;
+    }
+
     // Generate consistent timestamp for all operations in this batch
     let batch_timestamp = chrono::Utc::now().naive_utc();
-    
+
     Ok((current_state, updates, batch_timestamp))
 }
 
@@ -870,8 +879,9 @@ fn compute_changes(
     value_columns: Vec<String>,
     system_date: String,
     update_mode: String,
+    conflate_inputs: Option<bool>,
 ) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
-    compute_changes_with_hash_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, None)
+    compute_changes_with_hash_algorithm(current_state, updates, id_columns, value_columns, system_date, update_mode, None, conflate_inputs)
 }
 
 #[pyfunction]
@@ -883,29 +893,33 @@ fn compute_changes_with_hash_algorithm(
     system_date: String,
     update_mode: String,
     hash_algorithm: Option<String>,
+    conflate_inputs: Option<bool>,
 ) -> PyResult<(Vec<usize>, Vec<PyRecordBatch>, Vec<PyRecordBatch>)> {
     // Convert PyRecordBatch to Arrow RecordBatch
     let current_batch = current_state.as_ref().clone();
     let updates_batch = updates.as_ref().clone();
-    
+
     // Parse system_date
     let system_date = chrono::NaiveDate::parse_from_str(&system_date, "%Y-%m-%d")
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid date format: {}", e)))?;
-    
+
     // Parse update_mode
     let mode = match update_mode.as_str() {
         "delta" => UpdateMode::Delta,
         "full_state" => UpdateMode::FullState,
         _ => return Err(pyo3::exceptions::PyValueError::new_err("Invalid update_mode. Must be 'delta' or 'full_state'")),
     };
-    
+
     // Parse hash algorithm
     let algorithm = match hash_algorithm {
         Some(algo_str) => HashAlgorithm::from_str(&algo_str)
             .map_err(pyo3::exceptions::PyValueError::new_err)?,
         None => HashAlgorithm::default(),
     };
-    
+
+    // Parse conflate_inputs parameter (default to false for backward compatibility)
+    let conflate = conflate_inputs.unwrap_or(false);
+
     // Call the process_updates function
     let changeset = process_updates_with_algorithm(
         current_batch,
@@ -915,6 +929,7 @@ fn compute_changes_with_hash_algorithm(
         system_date,
         mode,
         algorithm,
+        conflate,
     ).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     
     // Convert the result back to Python types

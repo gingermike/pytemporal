@@ -31,33 +31,37 @@ class BitemporalTimeseriesProcessor:
     (complete replacement of state for given IDs).
     """
     
-    def __init__(self, id_columns: List[str], value_columns: List[str]):
+    def __init__(self, id_columns: List[str], value_columns: List[str], conflate_inputs: bool = False):
         """
         Initialize the processor with column definitions.
-        
+
         Args:
             id_columns: List of column names that identify a unique timeseries
             value_columns: List of column names containing the values to track
+            conflate_inputs: Whether to conflate consecutive input updates with same ID and values (default: False)
         """
         self.id_columns = id_columns
         self.value_columns = value_columns
+        self.conflate_inputs = conflate_inputs
     
     def compute_changes(
-        self, 
-        current_state: pd.DataFrame, 
+        self,
+        current_state: pd.DataFrame,
         updates: pd.DataFrame,
         system_date: Optional[str] = None,
-        update_mode: Literal["delta", "full_state"] = "delta"
+        update_mode: Literal["delta", "full_state"] = "delta",
+        conflate_inputs: Optional[bool] = None
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Compute the changes needed to update the bitemporal timeseries.
-        
+
         Args:
             current_state: DataFrame with current database state
             updates: DataFrame with incoming updates
             system_date: Optional system date (YYYY-MM-DD format)
             update_mode: "delta" for incremental updates, "full_state" for complete state replacement (only expires/inserts when values change)
-            
+            conflate_inputs: Whether to conflate consecutive input updates with same ID and values (default: use class-level setting)
+
         Returns:
             Tuple of (rows_to_expire, rows_to_insert)
             - rows_to_expire: DataFrame with rows that need as_of_to set
@@ -78,6 +82,9 @@ class BitemporalTimeseriesProcessor:
         current_batch = self._convert_timestamps_to_microseconds(current_batch)
         updates_batch = self._convert_timestamps_to_microseconds(updates_batch)
         
+        # Determine conflate_inputs value (use method parameter if provided, otherwise use class default)
+        actual_conflate_inputs = conflate_inputs if conflate_inputs is not None else self.conflate_inputs
+
         # Call Rust function
         actual_system_date = system_date or datetime.now().strftime('%Y-%m-%d')
         expire_indices, insert_batch, expired_batch = _compute_changes(
@@ -86,7 +93,8 @@ class BitemporalTimeseriesProcessor:
             self.id_columns,
             self.value_columns,
             actual_system_date,
-            update_mode
+            update_mode,
+            actual_conflate_inputs
         )
         
         # Use expired records from Rust (with updated as_of_to timestamps)

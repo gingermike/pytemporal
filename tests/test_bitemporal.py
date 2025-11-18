@@ -7,6 +7,8 @@ import pandas as pd
 import pytest
 
 from pytemporal import BitemporalTimeseriesProcessor, INFINITY_TIMESTAMP
+
+from tests.scenarios.conflation import conflation
 from tests.scenarios.basic import overwrite, insert, unrelated_state, append_tail, append_tail_exact, append_head, \
     append_head_exact, intersect, no_change, full_state_basic, full_state_delete
 from tests.scenarios.complex import overlay_two, overlay_multiple, multi_intersection_single_point, \
@@ -35,19 +37,23 @@ scenarios = [
     multi_field,
     extend_current_row,
     extend_update,
-    no_change_with_intersection
+    no_change_with_intersection,
+
+    #conflation
+    conflation
 ]
 
 
 @pytest.mark.parametrize(
-    ("current_state", "updates", "expected", "update_mode"),
-    [scenario.data() + tuple([scenario.update_mode]) for scenario in scenarios],
+    ("current_state", "updates", "expected", "update_mode", "scenario_id"),
+    [scenario.data() + tuple([scenario.update_mode, scenario.id]) for scenario in scenarios],
     ids=[scenario.id for scenario in scenarios]
 )
 def test_update_scenarios(current_state: List,
                           updates: List,
                           expected: Tuple[List, List],
-                          update_mode: Literal["delta", "full_state"]):
+                          update_mode: Literal["delta", "full_state"],
+                          scenario_id: str):
 
     # Assemble
     processor = BitemporalTimeseriesProcessor(
@@ -58,11 +64,15 @@ def test_update_scenarios(current_state: List,
     current_state_df = pd.DataFrame(current_state, columns=default_columns)
     updates_df = pd.DataFrame(updates, columns=default_columns)
 
+    # Enable conflation for the conflation scenario
+    conflate_inputs = (scenario_id == "conflation")
+
     # Act
     expire, insert = processor.compute_changes(
         pd.DataFrame(current_state_df, columns=default_columns),
         pd.DataFrame(updates_df, columns=default_columns),
-        update_mode=update_mode
+        update_mode=update_mode,
+        conflate_inputs=conflate_inputs
     )
     expire = expire.sort_values(by=default_id_columns + ["effective_from"]).reset_index(drop=True)
     insert = insert.sort_values(by=default_id_columns + ["effective_from"]).reset_index(drop=True)
