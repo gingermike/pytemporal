@@ -43,6 +43,7 @@ print(f"Updated {len(result.to_insert)} records")
 - **⚡ Zero-Copy**: Apache Arrow columnar format for memory efficiency
 - **🔧 Flexible Schema**: Configure ID and value columns dynamically
 - **🎯 Two Update Modes**: Delta updates or full state replacement
+- **🔀 Smart Conflation**: Optional merging of consecutive records with identical values
 - **🏗️ Production Ready**: Comprehensive test coverage and clean architecture
 
 ## Documentation

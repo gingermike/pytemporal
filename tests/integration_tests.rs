@@ -678,3 +678,256 @@ fn test_hash_normalization_mixed_types() {
     // Run the normal test - with the hash normalization fix, AAPL should not be processed
     run_scenario(&scenario);
 }
+
+// ============================================================================
+// CONFLATION TESTS
+// ============================================================================
+
+/// Helper function to run scenarios with conflation enabled
+fn run_conflation_scenario(scenario: &TestScenario) {
+    let current_state = create_batch(scenario.current_state.clone());
+    let updates = create_batch(scenario.updates.clone());
+    let system_date = NaiveDate::from_ymd_opt(2025, 7, 27).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string(), "field".to_string()],
+        vec!["mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,  // Conflation tests use full_state mode
+        true, // conflate_inputs = true
+    ).unwrap();
+
+    // Extract actual results
+    let mut actual_expires = Vec::new();
+    for &expire_idx in &changeset.to_expire {
+        actual_expires.push(extract_simple_record(&current_state, expire_idx));
+    }
+    actual_expires.sort_by(|a, b| a.id.cmp(&b.id).then(a.field.cmp(&b.field)).then(a.effective_from.cmp(&b.effective_from)));
+
+    let mut actual_inserts = Vec::new();
+    for batch in &changeset.to_insert {
+        for i in 0..batch.num_rows() {
+            actual_inserts.push(extract_simple_record(batch, i));
+        }
+    }
+    actual_inserts.sort_by(|a, b| a.id.cmp(&b.id).then(a.field.cmp(&b.field)).then(a.effective_from.cmp(&b.effective_from)));
+
+    // Get expected results
+    let max_date = NaiveDate::from_ymd_opt(2262, 4, 11).unwrap();
+    let mut expected_expire: Vec<SimpleRecord> = scenario.expected_expire.iter().map(|&(id, field, mv, price, eff_from, eff_to, as_of_from, _)| {
+        SimpleRecord {
+            id,
+            field: field.to_string(),
+            mv,
+            price,
+            effective_from: parse_date_or_max(eff_from, max_date),
+            effective_to: parse_date_or_max(eff_to, max_date),
+            as_of_from: parse_date_or_max(as_of_from, max_date),
+        }
+    }).collect();
+    expected_expire.sort_by(|a, b| a.id.cmp(&b.id).then(a.field.cmp(&b.field)).then(a.effective_from.cmp(&b.effective_from)));
+
+    let mut expected_insert: Vec<SimpleRecord> = scenario.expected_insert.iter().map(|&(id, field, mv, price, eff_from, eff_to, as_of_from, _)| {
+        SimpleRecord {
+            id,
+            field: field.to_string(),
+            mv,
+            price,
+            effective_from: parse_date_or_max(eff_from, max_date),
+            effective_to: parse_date_or_max(eff_to, max_date),
+            as_of_from: parse_date_or_max(as_of_from, max_date),
+        }
+    }).collect();
+    expected_insert.sort_by(|a, b| a.id.cmp(&b.id).then(a.field.cmp(&b.field)).then(a.effective_from.cmp(&b.effective_from)));
+
+    // Assert
+    assert_eq!(actual_expires, expected_expire,
+        "Scenario '{}' - Expected expires don't match. Expected: {:?}, Got: {:?}",
+        scenario.name, expected_expire, actual_expires);
+    assert_eq!(actual_inserts, expected_insert,
+        "Scenario '{}' - Expected inserts don't match. Expected: {:?}, Got: {:?}",
+        scenario.name, expected_insert, actual_inserts);
+}
+
+#[test]
+fn test_conflation_basic() {
+    let scenario = TestScenario {
+        name: "conflation_basic",
+        current_state: vec![],
+        updates: vec![
+            // Two consecutive segments with same values - should merge
+            (1234, "test", 2, 2, "2020-03-01", "2020-11-01", "2025-01-01", "max"),
+            (1234, "test", 2, 2, "2020-11-01", "2021-11-01", "2025-01-01", "max"),
+            // Another ID with consecutive segments
+            (4567, "test_b", 1, 1, "2020-03-01", "2020-11-01", "2025-01-01", "max"),
+            (4567, "test_b", 1, 1, "2020-11-01", "2021-11-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            // Should be conflated into single records
+            (1234, "test", 2, 2, "2020-03-01", "2021-11-01", "2025-01-01", "max"),
+            (4567, "test_b", 1, 1, "2020-03-01", "2021-11-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_three_segments() {
+    let scenario = TestScenario {
+        name: "conflation_three_segments",
+        current_state: vec![],
+        updates: vec![
+            // Three consecutive segments with same values - should all merge
+            (1234, "test", 10, 10, "2020-01-01", "2020-04-01", "2025-01-01", "max"),
+            (1234, "test", 10, 10, "2020-04-01", "2020-07-01", "2025-01-01", "max"),
+            (1234, "test", 10, 10, "2020-07-01", "2020-10-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            (1234, "test", 10, 10, "2020-01-01", "2020-10-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_partial() {
+    let scenario = TestScenario {
+        name: "conflation_partial",
+        current_state: vec![],
+        updates: vec![
+            // First two should merge (same values)
+            (1234, "test", 5, 5, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            (1234, "test", 5, 5, "2020-06-01", "2020-12-01", "2025-01-01", "max"),
+            // Value changes - should NOT merge with above
+            (1234, "test", 10, 10, "2020-12-01", "2021-06-01", "2025-01-01", "max"),
+            // Last two should merge (same new values)
+            (1234, "test", 10, 10, "2021-06-01", "2021-12-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            (1234, "test", 5, 5, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+            (1234, "test", 10, 10, "2020-12-01", "2021-12-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_non_consecutive() {
+    let scenario = TestScenario {
+        name: "conflation_non_consecutive",
+        current_state: vec![],
+        updates: vec![
+            (1234, "test", 7, 7, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            // Gap here: 2020-06-01 to 2020-07-01
+            (1234, "test", 7, 7, "2020-07-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            // Should remain as two separate records due to gap
+            (1234, "test", 7, 7, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            (1234, "test", 7, 7, "2020-07-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_mixed_ids() {
+    let scenario = TestScenario {
+        name: "conflation_mixed_ids",
+        current_state: vec![],
+        updates: vec![
+            // ID 1234 - two segments that merge
+            (1234, "field_a", 3, 3, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            (1234, "field_a", 3, 3, "2020-06-01", "2020-12-01", "2025-01-01", "max"),
+            // ID 5678 - single segment, no merge opportunity
+            (5678, "field_b", 8, 8, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+            // ID 9999 - three segments that all merge
+            (9999, "field_c", 1, 2, "2020-01-01", "2020-04-01", "2025-01-01", "max"),
+            (9999, "field_c", 1, 2, "2020-04-01", "2020-08-01", "2025-01-01", "max"),
+            (9999, "field_c", 1, 2, "2020-08-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            (1234, "field_a", 3, 3, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+            (5678, "field_b", 8, 8, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+            (9999, "field_c", 1, 2, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_unsorted_input() {
+    let scenario = TestScenario {
+        name: "conflation_unsorted_input",
+        current_state: vec![],
+        updates: vec![
+            // Out of order: later segment comes first
+            (1234, "test", 15, 20, "2020-06-01", "2020-12-01", "2025-01-01", "max"),
+            (1234, "test", 15, 20, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            // Another ID, also out of order with three segments
+            (5678, "test", 25, 30, "2020-04-01", "2020-08-01", "2025-01-01", "max"),
+            (5678, "test", 25, 30, "2020-08-01", "2020-12-01", "2025-01-01", "max"),
+            (5678, "test", 25, 30, "2020-01-01", "2020-04-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            (1234, "test", 15, 20, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+            (5678, "test", 25, 30, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_with_current_state() {
+    let scenario = TestScenario {
+        name: "conflation_with_current_state",
+        current_state: vec![
+            // Existing record in current state
+            (1234, "test", 100, 100, "2019-01-01", "2020-01-01", "2025-01-01", "max"),
+        ],
+        updates: vec![
+            // Two consecutive updates that should conflate
+            (1234, "test", 200, 200, "2020-01-01", "2020-06-01", "2025-07-27", "max"),
+            (1234, "test", 200, 200, "2020-06-01", "2021-01-01", "2025-07-27", "max"),
+        ],
+        expected_expire: vec![
+            // Expire the old record
+            (1234, "test", 100, 100, "2019-01-01", "2020-01-01", "2025-01-01", "max"),
+        ],
+        expected_insert: vec![
+            // Insert one conflated record (not two separate ones)
+            (1234, "test", 200, 200, "2020-01-01", "2021-01-01", "2025-07-27", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}
+
+#[test]
+fn test_conflation_different_fields() {
+    let scenario = TestScenario {
+        name: "conflation_different_fields",
+        current_state: vec![],
+        updates: vec![
+            // ID 1234 with field_a - these merge
+            (1234, "field_a", 5, 10, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            (1234, "field_a", 5, 10, "2020-06-01", "2020-12-01", "2025-01-01", "max"),
+            // ID 1234 with field_b - these merge separately
+            (1234, "field_b", 7, 14, "2020-01-01", "2020-06-01", "2025-01-01", "max"),
+            (1234, "field_b", 7, 14, "2020-06-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+        expected_expire: vec![],
+        expected_insert: vec![
+            (1234, "field_a", 5, 10, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+            (1234, "field_b", 7, 14, "2020-01-01", "2020-12-01", "2025-01-01", "max"),
+        ],
+    };
+    run_conflation_scenario(&scenario);
+}

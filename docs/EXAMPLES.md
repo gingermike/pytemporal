@@ -121,6 +121,144 @@ result = processor.process_updates(current_state, updates, '2025-01-27')
 # Automatically creates tombstone record for deleted ACC003
 ```
 
+## Input Conflation
+
+Input conflation merges consecutive records with identical values to optimize processing and reduce output size.
+
+### Basic Conflation Example
+
+```python
+import pandas as pd
+from pytemporal import BitemporalTimeseriesProcessor
+
+# External feed provides non-conflated data with consecutive segments
+updates = pd.DataFrame({
+    'id': [1234, 1234, 5678, 5678],
+    'field': ['price', 'price', 'volume', 'volume'],
+    'value': [100.0, 100.0, 5000, 5000],  # Same values!
+    'effective_from': pd.to_datetime([
+        '2025-01-01', '2025-06-01',  # Consecutive for id=1234
+        '2025-01-01', '2025-06-01'   # Consecutive for id=5678
+    ]),
+    'effective_to': pd.to_datetime([
+        '2025-06-01', '2025-12-31',
+        '2025-06-01', '2025-12-31'
+    ]),
+    'as_of_from': pd.to_datetime(['2025-01-27'] * 4),
+    'as_of_to': pd.to_datetime(['2262-04-11'] * 4)
+})
+
+# Enable conflation to merge consecutive same-value segments
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id', 'field'],
+    value_columns=['value'],
+    conflate_inputs=True  # Enable conflation
+)
+
+_, insert = processor.compute_changes(
+    current_state=pd.DataFrame(columns=updates.columns),
+    updates=updates,
+    update_mode='full_state'
+)
+
+# Result: 2 records instead of 4 (50% reduction)
+# [1234, 'price', 100.0, '2025-01-01', '2025-12-31', ...]
+# [5678, 'volume', 5000, '2025-01-01', '2025-12-31', ...]
+print(f"Input: {len(updates)} rows → Output: {len(insert)} rows")
+# Output: Input: 4 rows → Output: 2 rows
+```
+
+### Selective Conflation
+
+```python
+# Create processor with conflation disabled by default
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id'],
+    value_columns=['value']
+    # conflate_inputs defaults to False
+)
+
+# Enable for specific external feeds that need it
+external_feed_result = processor.compute_changes(
+    current_state,
+    external_updates,
+    conflate_inputs=True  # Enable for this call
+)
+
+# Disable for clean internal data
+internal_result = processor.compute_changes(
+    current_state,
+    internal_updates,
+    conflate_inputs=False  # Or omit - uses class default
+)
+```
+
+### Conflation with Value Changes
+
+```python
+# Only consecutive records with SAME values are merged
+updates = pd.DataFrame({
+    'id': [1234, 1234, 1234, 1234],
+    'field': ['price', 'price', 'price', 'price'],
+    'value': [100.0, 100.0, 150.0, 150.0],  # Value changes
+    'effective_from': pd.to_datetime([
+        '2025-01-01', '2025-03-01',  # Same value (100)
+        '2025-06-01', '2025-09-01'   # Same value (150)
+    ]),
+    'effective_to': pd.to_datetime([
+        '2025-03-01', '2025-06-01',
+        '2025-09-01', '2025-12-31'
+    ]),
+    'as_of_from': pd.to_datetime(['2025-01-27'] * 4),
+    'as_of_to': pd.to_datetime(['2262-04-11'] * 4)
+})
+
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id', 'field'],
+    value_columns=['value'],
+    conflate_inputs=True
+)
+
+_, insert = processor.compute_changes(
+    pd.DataFrame(columns=updates.columns),
+    updates,
+    update_mode='full_state'
+)
+
+# Result: 2 records (one for value=100, one for value=150)
+# [1234, 'price', 100.0, '2025-01-01', '2025-06-01', ...]
+# [1234, 'price', 150.0, '2025-06-01', '2025-12-31', ...]
+assert len(insert) == 2
+```
+
+### Performance Considerations
+
+```python
+# Good use case: External feed with many redundant segments
+large_external_feed = load_external_data()  # 50,000 rows
+
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id', 'field'],
+    value_columns=['price', 'volume'],
+    conflate_inputs=True  # Reduces 50k → 25k rows (50% reduction)
+)
+
+result = processor.compute_changes(current_state, large_external_feed)
+# Benefits: Faster processing, fewer output rows, reduced storage
+
+# Bad use case: Small, already-clean data
+small_clean_data = pd.DataFrame(...)  # 100 rows, already conflated
+
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id'],
+    value_columns=['value'],
+    conflate_inputs=False  # Skip overhead for clean data
+)
+
+result = processor.compute_changes(current_state, small_clean_data)
+# Benefits: Avoid 6-8% overhead when not needed
+```
+
 ## Working with Different Date Types
 
 ```python

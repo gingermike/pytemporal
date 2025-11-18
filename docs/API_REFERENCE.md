@@ -21,12 +21,16 @@ result = processor.process_updates(
 )
 ```
 
-**Parameters:**
+**Constructor Parameters:**
 - `id_columns` (List[str]): Column names that identify unique entities
 - `value_columns` (List[str]): Column names containing business values
+- `conflate_inputs` (bool, optional): Merge consecutive updates with same values (default: False)
+
+**Method Parameters:**
 - `system_date` (str/datetime): System date for temporal processing
 - `update_mode` (str, optional): 'delta' (default) or 'full_state'
 - `hash_algorithm` (str, optional): 'xxhash' (default) or 'sha256'
+- `conflate_inputs` (bool, optional): Override class-level conflation setting
 
 **Returns:**
 - `ProcessingResult` object with `to_expire`, `to_insert`, and `expired_records`
@@ -149,11 +153,106 @@ processor = BitemporalTimeseriesProcessor(
 Cryptographic hash for legacy compatibility:
 ```python
 processor = BitemporalTimeseriesProcessor(
-    id_columns=['id'], 
+    id_columns=['id'],
     value_columns=['value'],
     hash_algorithm='sha256'
 )
 ```
+
+## Input Conflation
+
+Input conflation merges consecutive update records with the same ID and values **before** timeline processing. This is useful when receiving non-conflated data from external sources.
+
+### When to Use
+
+**✅ Enable conflation when:**
+- External data feeds provide redundant consecutive segments
+- Source systems don't perform conflation
+- You want to optimize processing and reduce output rows
+
+**⚠️ Skip conflation when:**
+- Data is already conflated
+- Processing small datasets (<1k rows)
+- You need maximum performance and know data has no redundancy
+
+### Performance Impact
+
+- **Overhead**: ~6-8% when no conflation opportunities exist
+- **Benefit**: +9-11% speedup when 80% of records can be conflated
+- **Row Reduction**: Can reduce output by 50-75% with consecutive same-value segments
+
+### Usage Examples
+
+**Class-Level Configuration (applies to all calls):**
+```python
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id', 'field'],
+    value_columns=['mv', 'price'],
+    conflate_inputs=True  # Enable for all process_updates calls
+)
+
+expire, insert = processor.compute_changes(current_state, updates)
+```
+
+**Per-Call Override:**
+```python
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id', 'field'],
+    value_columns=['mv', 'price']
+    # conflate_inputs defaults to False
+)
+
+# Enable for specific call
+expire, insert = processor.compute_changes(
+    current_state,
+    updates,
+    conflate_inputs=True  # Override class default
+)
+```
+
+**Example: Conflation in Action**
+```python
+import pandas as pd
+from pytemporal import BitemporalTimeseriesProcessor
+
+# Input: 4 records with consecutive dates and same values
+updates = pd.DataFrame([
+    [1234, "test", 100, 200, "2020-01-01", "2020-06-01", ...],
+    [1234, "test", 100, 200, "2020-06-01", "2020-12-01", ...],  # Same values
+    [5678, "demo", 50, 75, "2020-01-01", "2020-06-01", ...],
+    [5678, "demo", 50, 75, "2020-06-01", "2020-12-01", ...],    # Same values
+], columns=['id', 'field', 'mv', 'price', 'effective_from', 'effective_to', ...])
+
+processor = BitemporalTimeseriesProcessor(
+    id_columns=['id', 'field'],
+    value_columns=['mv', 'price'],
+    conflate_inputs=True
+)
+
+_, insert = processor.compute_changes(
+    current_state=pd.DataFrame(columns=updates.columns),
+    updates=updates,
+    update_mode='full_state'
+)
+
+# Output: 2 records (conflated)
+# [1234, "test", 100, 200, "2020-01-01", "2020-12-01", ...]
+# [5678, "demo", 50, 75, "2020-01-01", "2020-12-01", ...]
+assert len(insert) == 2
+```
+
+### How It Works
+
+Conflation happens during input preparation:
+
+1. **Grouping**: Records grouped by ID columns
+2. **Sorting**: Within each group, sorted by `effective_from`
+3. **Scanning**: Consecutive records checked for:
+   - Same `value_hash` (identical business values)
+   - Adjacent dates (`effective_to[i] == effective_from[i+1]`)
+4. **Merging**: Qualifying records merged by extending `effective_to` of first record
+
+This reduces the number of records flowing through timeline processing, batch consolidation, and Python conversion.
 
 ## Error Handling
 

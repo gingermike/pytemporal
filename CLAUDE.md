@@ -103,6 +103,7 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-09-06**: Implemented configurable hash algorithms with XxHash as default and SHA256 for legacy compatibility. Added Arrow-direct hash computation that bypasses expensive Arrow→Rust serialization for improved performance.
 - **2025-09-07**: Fixed critical timestamp type handling regression. The code now properly preserves input schema timestamp types (Date32, Date64, TimestampSecond/Millisecond/Microsecond/Nanosecond) throughout the processing pipeline. Performance: 800k rows × 80 columns processes in ~10 seconds with ~10GB memory usage.
 - **2025-01-27**: MAJOR PERFORMANCE BREAKTHROUGH! Achieved world-class 157,000+ rows/second through strategic function inlining optimization. Key discovery: `create_id_key` was called 850,000 times per dataset - adding `#[inline(always)]` eliminated function call overhead and delivered 144% performance improvement. Total gain: 60k → 157k rows/sec (191% of target) while maintaining clean modular architecture and 100% test coverage (99/99 tests pass).
+- **2025-11-18**: Added toggleable input conflation feature. New `conflate_inputs` parameter (default: false) merges consecutive update records with same ID and values before timeline processing. Performance: 6-8% overhead when not needed, +9-11% speedup when 80% of records can be conflated. Comprehensive test coverage: 8 Python scenarios + 8 Rust tests. Backward compatible opt-in design.
 
 ## RESOLVED: Full State Mode Tombstone Records ✅
 
