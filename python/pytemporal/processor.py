@@ -443,22 +443,26 @@ class BitemporalTimeseriesProcessor:
 def add_hash_key(df: pd.DataFrame, value_fields: List[str]) -> pd.DataFrame:
     """
     Add a hash key column to a pandas DataFrame based on specified value fields.
-    
+
     This function uses the same hash algorithm as the internal bitemporal processing
-    to ensure complete consistency. The hash is computed using BLAKE3 and provides
-    a fast way to detect changes in value columns.
-    
+    to ensure complete consistency. The hash is computed using XxHash (a fast,
+    high-quality non-cryptographic hash) by default, providing an efficient way
+    to detect changes in value columns.
+
+    For legacy compatibility with existing SHA256 hashes, use add_hash_key_with_algorithm
+    and specify 'sha256' as the algorithm parameter.
+
     Args:
         df: Input DataFrame
         value_fields: List of column names to include in the hash calculation
-        
+
     Returns:
-        DataFrame with an additional 'value_hash' column
-        
+        DataFrame with an additional 'value_hash' column containing XxHash hex strings
+
     Raises:
         ValueError: If any value_fields are not found in the DataFrame
         RuntimeError: If the hash computation fails
-        
+
     Example:
         >>> import pandas as pd
         >>> from pytemporal import add_hash_key
@@ -466,6 +470,9 @@ def add_hash_key(df: pd.DataFrame, value_fields: List[str]) -> pd.DataFrame:
         >>> result = add_hash_key(df, ['price', 'volume'])
         >>> print(result.columns.tolist())
         ['id', 'price', 'volume', 'value_hash']
+
+    See Also:
+        add_hash_key_with_algorithm: Specify a different hash algorithm (e.g., 'sha256')
     """
     if df.empty:
         raise ValueError("Cannot add hash key to empty DataFrame")

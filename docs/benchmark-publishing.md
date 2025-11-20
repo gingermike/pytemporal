@@ -167,7 +167,7 @@ Flamegraphs help identify:
 1. **`process_id_timeline`** - Core algorithm logic
 2. **Rayon parallel processing** - Parallelization overhead
 3. **Arrow operations** - Columnar data manipulation
-4. **Hash computation** - Blake3 hashing for conflation
+4. **Hash computation** - XxHash (default) or SHA256 hashing for value change detection
 
 ## Troubleshooting
 

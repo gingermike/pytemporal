@@ -255,6 +255,28 @@ def _full_state_delete() -> Tuple[List, List, Tuple]:
     )
 
 
+def _merge_consecutive_rows() -> Tuple[List, List, Tuple]:
+    """
+    Demonstrates merging rows with the same value that are not overlapping, but next to each other
+    """
+
+    return (
+        [
+            [1, "test", 100.0, 250.0, pdt("2020-01-02"), pdt("2020-01-03"), pdt_past, pd_max],
+        ],
+        [
+            [1, "test", 100.0, 250.0, pdt("2020-01-01"), pdt("2020-01-02"), pdt_now, pd_max],
+        ],
+        (
+            [
+                [1, "test", 100.0, 250.0, pdt("2020-01-02"), pdt("2020-01-03"), pdt_past, pd_max],
+            ],
+            [
+                [1, "test", 100.0, 250.0, pdt("2020-01-01"), pdt("2020-01-03"), pdt_now, pd_max]
+            ]
+        )
+    )
+
 insert = BitemporalScenario("insert", _insert, "delta")
 overwrite = BitemporalScenario("overwrite", _overwrite, "delta")
 unrelated_state = BitemporalScenario("unrelated_state", _unrelated_state, "delta")
@@ -266,3 +288,4 @@ intersect = BitemporalScenario("intersect", _intersect, "delta")
 no_change = BitemporalScenario("no_change", _no_change, "delta")
 full_state_basic = BitemporalScenario("full_state_basic", _full_state_basic, "full_state")
 full_state_delete = BitemporalScenario("full_state_delete", _full_state_delete, "full_state")
+_merge_consecutive_rows = BitemporalScenario("merge_consecutive_rows", _merge_consecutive_rows, "full_state")

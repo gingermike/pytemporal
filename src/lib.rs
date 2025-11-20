@@ -1,5 +1,5 @@
 use arrow::array::{RecordBatch};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
 use rustc_hash::FxHashMap;
@@ -594,6 +594,155 @@ fn create_tombstone_records_optimized(
         .map_err(|e| format!("Failed to create tombstone batch: {}", e))
 }
 
+/// Extract temporal bounds (effective_from, effective_to) for a record
+/// PERFORMANCE: Inlined for hot path usage in full_state temporal comparisons
+#[inline]
+fn get_temporal_bounds(
+    batch: &RecordBatch,
+    row_idx: usize,
+) -> Result<(NaiveDateTime, NaiveDateTime), String> {
+    let eff_from_array = batch.column_by_name("effective_from")
+        .ok_or("effective_from column not found")?;
+    let eff_to_array = batch.column_by_name("effective_to")
+        .ok_or("effective_to column not found")?;
+
+    let from = extract_datetime_flexible(eff_from_array.as_ref(), row_idx)?;
+    let to = extract_datetime_flexible(eff_to_array.as_ref(), row_idx)?;
+
+    Ok((from, to))
+}
+
+/// Check if two temporal segments are adjacent (touching endpoints but not overlapping)
+/// Adjacent means one segment ends exactly where the other begins
+#[inline]
+fn are_segments_adjacent(
+    seg1_from: NaiveDateTime,
+    seg1_to: NaiveDateTime,
+    seg2_from: NaiveDateTime,
+    seg2_to: NaiveDateTime,
+) -> bool {
+    seg1_to == seg2_from || seg2_to == seg1_from
+}
+
+/// Create a merged temporal segment from records across two batches
+/// Used when adjacent segments have identical values and should be coalesced
+fn create_merged_segment_cross_batch(
+    current_batch: &RecordBatch,
+    updates_batch: &RecordBatch,
+    current_idx: usize,
+    update_idx: usize,
+    batch_timestamp: NaiveDateTime,
+) -> Result<RecordBatch, String> {
+    // Get temporal bounds from both records
+    let (curr_from, curr_to) = get_temporal_bounds(current_batch, current_idx)?;
+    let (upd_from, upd_to) = get_temporal_bounds(updates_batch, update_idx)?;
+
+    // Calculate merged temporal range (earliest from, latest to)
+    let merged_from = curr_from.min(upd_from);
+    let merged_to = curr_to.max(upd_to);
+
+    // Use update record as the base (it has newer as_of information)
+    let indices = arrow::array::UInt64Array::from(vec![Some(update_idx as u64)]);
+    let base_batch = arrow::compute::take_record_batch(updates_batch, &indices)
+        .map_err(|e| format!("Failed to extract update record: {}", e))?;
+
+    // Replace the temporal columns with merged values
+    let schema = base_batch.schema();
+    let mut new_columns: Vec<arrow::array::ArrayRef> = Vec::with_capacity(schema.fields().len());
+
+    for field in schema.fields() {
+        let col_name = field.name();
+
+        match col_name.as_str() {
+            "effective_from" => {
+                // Set to merged start time
+                let array = create_timestamp_array(field.data_type(), merged_from, 1)?;
+                new_columns.push(array);
+            },
+            "effective_to" => {
+                // Set to merged end time
+                let array = create_timestamp_array(field.data_type(), merged_to, 1)?;
+                new_columns.push(array);
+            },
+            "as_of_from" => {
+                // Use batch_timestamp for the merged record (newer knowledge)
+                let array = create_timestamp_array(field.data_type(), batch_timestamp, 1)?;
+                new_columns.push(array);
+            },
+            _ => {
+                // Keep all other columns from the update record
+                new_columns.push(base_batch.column_by_name(col_name).unwrap().clone());
+            }
+        }
+    }
+
+    RecordBatch::try_new(schema, new_columns)
+        .map_err(|e| format!("Failed to create merged batch: {}", e))
+}
+
+/// Create a timestamp array with a single value, preserving the original data type
+fn create_timestamp_array(
+    data_type: &arrow::datatypes::DataType,
+    datetime: NaiveDateTime,
+    length: usize,
+) -> Result<arrow::array::ArrayRef, String> {
+    use arrow::datatypes::TimeUnit;
+    use arrow::array::*;
+
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+
+    match data_type {
+        arrow::datatypes::DataType::Timestamp(time_unit, tz) => {
+            let timezone_str = tz.as_ref().map(|t| t.to_string());
+
+            let array: arrow::array::ArrayRef = match time_unit {
+                TimeUnit::Nanosecond => {
+                    let nanoseconds = (datetime - epoch).num_nanoseconds()
+                        .ok_or("Timestamp overflow in nanoseconds")?;
+                    let values = vec![Some(nanoseconds); length];
+                    let array = TimestampNanosecondArray::from(values)
+                        .with_timezone_opt(timezone_str);
+                    std::sync::Arc::new(array)
+                }
+                TimeUnit::Microsecond => {
+                    let microseconds = (datetime - epoch).num_microseconds()
+                        .ok_or("Timestamp overflow in microseconds")?;
+                    let values = vec![Some(microseconds); length];
+                    let array = TimestampMicrosecondArray::from(values)
+                        .with_timezone_opt(timezone_str);
+                    std::sync::Arc::new(array)
+                }
+                TimeUnit::Millisecond => {
+                    let milliseconds = (datetime - epoch).num_milliseconds();
+                    let values = vec![Some(milliseconds); length];
+                    let array = TimestampMillisecondArray::from(values)
+                        .with_timezone_opt(timezone_str);
+                    std::sync::Arc::new(array)
+                }
+                TimeUnit::Second => {
+                    let seconds = (datetime - epoch).num_seconds();
+                    let values = vec![Some(seconds); length];
+                    let array = TimestampSecondArray::from(values)
+                        .with_timezone_opt(timezone_str);
+                    std::sync::Arc::new(array)
+                }
+            };
+            Ok(array)
+        }
+        arrow::datatypes::DataType::Date32 => {
+            let days = (datetime.date() - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+            let values = vec![Some(days); length];
+            Ok(std::sync::Arc::new(Date32Array::from(values)))
+        }
+        arrow::datatypes::DataType::Date64 => {
+            let millis = (datetime - epoch).num_milliseconds();
+            let values = vec![Some(millis); length];
+            Ok(std::sync::Arc::new(Date64Array::from(values)))
+        }
+        _ => Err(format!("Unsupported temporal data type: {:?}", data_type))
+    }
+}
+
 /// Optimized full state processing without expensive conversions until needed
 #[allow(clippy::too_many_arguments)]
 fn process_full_state_optimized(
@@ -615,41 +764,83 @@ fn process_full_state_optimized(
         .map(|col| col.as_any().downcast_ref::<arrow::array::StringArray>().unwrap());
     
     if let (Some(current_hashes), Some(update_hashes)) = (current_hash_array, updates_hash_array) {
-        // Fast hash comparison path
-        // In full_state mode:
-        // - If value changed (different hash) -> expire old, insert new
-        // - If value unchanged (same hash) -> do nothing
-        
-        // Track which updates actually need to be inserted (ones with changes)
+        // Enhanced full_state mode with temporal awareness:
+        // - Different values (different hash) -> expire old, insert new
+        // - Same values (same hash) + adjacent temporal segments -> merge into single segment
+        // - Same values + non-adjacent temporal segments -> insert update as-is
+        // - Same values + exact same temporal range -> do nothing (true no-change)
+
+        // Track which updates need to be inserted (not merged)
         let mut updates_to_insert = Vec::new();
-        
-        // For each update, check if it represents a change
+
+        // For each update, determine the relationship with current state
         for &update_idx in update_row_indices {
             let update_hash = update_hashes.value(update_idx);
-            
-            // Check if any current record has the same hash (no change)
-            let mut has_same_value = false;
+            let update_temporal = get_temporal_bounds(updates_batch, update_idx)?;
+
+            // Find if there's a matching current record (same hash)
+            let mut matching_current_idx: Option<usize> = None;
+            let mut is_adjacent = false;
+            let mut is_exact_match = false;
+
             for &current_idx in current_row_indices {
                 let current_hash = current_hashes.value(current_idx);
+
                 if current_hash == update_hash {
-                    has_same_value = true;
-                    break;
+                    // Found a matching value hash
+                    matching_current_idx = Some(current_idx);
+                    let current_temporal = get_temporal_bounds(current_batch, current_idx)?;
+
+                    // Check temporal relationship
+                    if are_segments_adjacent(
+                        current_temporal.0, current_temporal.1,
+                        update_temporal.0, update_temporal.1
+                    ) {
+                        is_adjacent = true;
+                    } else if current_temporal == update_temporal {
+                        // Exact same temporal range with same values = no change
+                        is_exact_match = true;
+                    }
+
+                    break; // Found the matching record
                 }
             }
-            
-            if !has_same_value {
-                // Value changed, need to expire old and insert new
-                // First expire all current records for this ID
-                if !current_row_indices.is_empty() && updates_to_insert.is_empty() {
-                    // Only expire once for this ID group
-                    expire_indices.extend(current_row_indices.iter().cloned());
-                }
-                updates_to_insert.push(update_idx);
+
+            // Decision logic based on relationship
+            match (matching_current_idx, is_adjacent, is_exact_match) {
+                (Some(current_idx), true, _) => {
+                    // Case 1: Adjacent segments with same values -> MERGE
+                    expire_indices.push(current_idx);
+                    let merged_batch = create_merged_segment_cross_batch(
+                        current_batch,
+                        updates_batch,
+                        current_idx,
+                        update_idx,
+                        _batch_timestamp,
+                    )?;
+                    insert_batches.push(merged_batch);
+                },
+                (Some(_), false, true) => {
+                    // Case 2: Exact same temporal range with same values -> NO CHANGE
+                    // Do nothing (no expire, no insert)
+                },
+                (Some(_current_idx), false, false) => {
+                    // Case 3: Same values but different non-adjacent temporal ranges
+                    // Insert the update as a separate temporal segment
+                    updates_to_insert.push(update_idx);
+                },
+                (None, _, _) => {
+                    // Case 4: Different values -> expire all current, insert update
+                    if updates_to_insert.is_empty() {
+                        // Only expire once for this ID group
+                        expire_indices.extend(current_row_indices.iter().cloned());
+                    }
+                    updates_to_insert.push(update_idx);
+                },
             }
-            // If has_same_value, do nothing (no expire, no insert)
         }
-        
-        // Insert only the updates that represent actual changes
+
+        // Insert updates that weren't merged
         if !updates_to_insert.is_empty() {
             let indices_array = arrow::array::UInt64Array::from(
                 updates_to_insert.iter().map(|&i| Some(i as u64)).collect::<Vec<_>>()

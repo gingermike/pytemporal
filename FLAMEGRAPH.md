@@ -118,7 +118,7 @@ Based on the algorithm structure, look for these areas in flamegraphs:
 - **`process_id_timeline`** - Core timeline processing logic
 - **Rayon parallel processing** - Parallelization overhead vs benefit
 - **Arrow operations** - Columnar data manipulation
-- **Hash computation** - Value hashing for conflation (`blake3` operations)
+- **Hash computation** - Value hashing for change detection (`xxhash` by default, `sha256` for legacy)
 
 ### Secondary Areas
 - **`has_temporal_intersection`** - Overlap detection logic
