@@ -462,9 +462,182 @@ class TestAddHashKeyEdgeCases:
         
         result1 = add_hash_key(df, ['a', 'b'])
         result2 = add_hash_key(df, ['b', 'a'])  # Different order
-        
+
         # Field order should matter for hash computation
         assert not result1['value_hash'].equals(result2['value_hash'])
+
+
+class TestHashAlgorithmParameter:
+    """Test the hash_algorithm parameter functionality."""
+
+    def test_default_algorithm_is_xxhash(self):
+        """Test that default algorithm is xxhash."""
+        df = pd.DataFrame({
+            'id': [1, 2, 3],
+            'price': [100.0, 200.0, 100.0],
+            'volume': [10, 20, 10]
+        })
+
+        result_default = add_hash_key(df, ['price', 'volume'])
+        result_explicit_xxhash = add_hash_key(df, ['price', 'volume'], hash_algorithm='xxhash')
+
+        # Default should match explicit xxhash
+        pd.testing.assert_series_equal(
+            result_default['value_hash'],
+            result_explicit_xxhash['value_hash'],
+            check_names=False
+        )
+
+    def test_xxhash_algorithm_explicit(self):
+        """Test explicit xxhash algorithm parameter."""
+        df = pd.DataFrame({
+            'id': [1, 2],
+            'value': [100, 200]
+        })
+
+        result = add_hash_key(df, ['value'], hash_algorithm='xxhash')
+
+        # Check hash column exists
+        assert 'value_hash' in result.columns
+        # Check hash values are non-empty strings
+        assert all(isinstance(h, str) and len(h) > 0 for h in result['value_hash'])
+        # XxHash produces 16 character hex strings
+        assert all(len(h) == 16 for h in result['value_hash'])
+
+    def test_sha256_algorithm(self):
+        """Test SHA256 algorithm parameter."""
+        df = pd.DataFrame({
+            'id': [1, 2],
+            'value': [100, 200]
+        })
+
+        result = add_hash_key(df, ['value'], hash_algorithm='sha256')
+
+        # Check hash column exists
+        assert 'value_hash' in result.columns
+        # Check hash values are non-empty strings
+        assert all(isinstance(h, str) and len(h) > 0 for h in result['value_hash'])
+        # SHA256 produces 64 character hex strings
+        assert all(len(h) == 64 for h in result['value_hash'])
+
+    def test_xxhash_vs_sha256_different(self):
+        """Test that xxhash and sha256 produce different hash values."""
+        df = pd.DataFrame({
+            'id': [1, 2, 3],
+            'price': [100.0, 200.0, 100.0],
+            'volume': [10, 20, 10]
+        })
+
+        result_xxhash = add_hash_key(df, ['price', 'volume'], hash_algorithm='xxhash')
+        result_sha256 = add_hash_key(df, ['price', 'volume'], hash_algorithm='sha256')
+
+        # Different algorithms should produce different hashes
+        assert not result_xxhash['value_hash'].equals(result_sha256['value_hash'])
+
+        # But both should still have same values produce same hashes within algorithm
+        assert result_xxhash.loc[0, 'value_hash'] == result_xxhash.loc[2, 'value_hash']
+        assert result_sha256.loc[0, 'value_hash'] == result_sha256.loc[2, 'value_hash']
+
+    def test_invalid_algorithm_raises_error(self):
+        """Test that invalid algorithm parameter raises appropriate error."""
+        df = pd.DataFrame({
+            'id': [1, 2],
+            'value': [100, 200]
+        })
+
+        with pytest.raises((ValueError, RuntimeError)) as exc_info:
+            add_hash_key(df, ['value'], hash_algorithm='invalid_algorithm')
+
+        # Error message should mention the unknown algorithm
+        assert 'algorithm' in str(exc_info.value).lower() or 'invalid' in str(exc_info.value).lower()
+
+    def test_algorithm_case_insensitive(self):
+        """Test that algorithm parameter is case-insensitive."""
+        df = pd.DataFrame({
+            'id': [1, 2],
+            'value': [100, 200]
+        })
+
+        result_lower = add_hash_key(df, ['value'], hash_algorithm='xxhash')
+        result_upper = add_hash_key(df, ['value'], hash_algorithm='XXHASH')
+        result_mixed = add_hash_key(df, ['value'], hash_algorithm='XxHash')
+
+        # All case variations should produce identical results
+        pd.testing.assert_series_equal(result_lower['value_hash'], result_upper['value_hash'], check_names=False)
+        pd.testing.assert_series_equal(result_lower['value_hash'], result_mixed['value_hash'], check_names=False)
+
+    def test_algorithm_aliases(self):
+        """Test that algorithm aliases work correctly."""
+        df = pd.DataFrame({
+            'id': [1, 2],
+            'value': [100, 200]
+        })
+
+        # Test xxhash aliases
+        result_xxhash = add_hash_key(df, ['value'], hash_algorithm='xxhash')
+        result_xx = add_hash_key(df, ['value'], hash_algorithm='xx')
+        pd.testing.assert_series_equal(result_xxhash['value_hash'], result_xx['value_hash'], check_names=False)
+
+        # Test sha256 aliases
+        result_sha256 = add_hash_key(df, ['value'], hash_algorithm='sha256')
+        result_sha = add_hash_key(df, ['value'], hash_algorithm='sha')
+        pd.testing.assert_series_equal(result_sha256['value_hash'], result_sha['value_hash'], check_names=False)
+
+    def test_hash_consistency_within_algorithm(self):
+        """Test that same input produces same hash within an algorithm."""
+        df = pd.DataFrame({
+            'id': [1, 2, 3, 4],
+            'price': [100.0, 200.0, 100.0, 300.0],
+            'volume': [10, 20, 10, 30]
+        })
+
+        # Test xxhash consistency
+        result1_xxhash = add_hash_key(df, ['price', 'volume'], hash_algorithm='xxhash')
+        result2_xxhash = add_hash_key(df, ['price', 'volume'], hash_algorithm='xxhash')
+        pd.testing.assert_series_equal(result1_xxhash['value_hash'], result2_xxhash['value_hash'], check_names=False)
+
+        # Test sha256 consistency
+        result1_sha256 = add_hash_key(df, ['price', 'volume'], hash_algorithm='sha256')
+        result2_sha256 = add_hash_key(df, ['price', 'volume'], hash_algorithm='sha256')
+        pd.testing.assert_series_equal(result1_sha256['value_hash'], result2_sha256['value_hash'], check_names=False)
+
+    def test_algorithm_with_complex_data_types(self):
+        """Test algorithm parameter works with various data types."""
+        df = pd.DataFrame({
+            'string_col': ['abc', 'def'],
+            'int_col': [1, 2],
+            'float_col': [1.5, 2.5],
+            'bool_col': [True, False],
+            'date_col': [date(2024, 1, 1), date(2024, 1, 2)],
+            'datetime_col': [datetime(2024, 1, 1, 12, 0), datetime(2024, 1, 2, 13, 0)]
+        })
+
+        value_fields = ['string_col', 'int_col', 'float_col', 'bool_col', 'date_col', 'datetime_col']
+
+        # Both algorithms should handle all data types
+        result_xxhash = add_hash_key(df, value_fields, hash_algorithm='xxhash')
+        result_sha256 = add_hash_key(df, value_fields, hash_algorithm='sha256')
+
+        # Verify hashes were computed
+        assert all(len(h) == 16 for h in result_xxhash['value_hash'])
+        assert all(len(h) == 64 for h in result_sha256['value_hash'])
+
+        # Different rows should have different hashes
+        assert result_xxhash['value_hash'].iloc[0] != result_xxhash['value_hash'].iloc[1]
+        assert result_sha256['value_hash'].iloc[0] != result_sha256['value_hash'].iloc[1]
+
+    def test_algorithm_backward_compatibility(self):
+        """Test that omitting algorithm parameter still works (backward compatibility)."""
+        df = pd.DataFrame({
+            'id': [1, 2, 3],
+            'value': [100, 200, 300]
+        })
+
+        # Should work without algorithm parameter (uses default xxhash)
+        result = add_hash_key(df, ['value'])
+
+        assert 'value_hash' in result.columns
+        assert all(len(h) == 16 for h in result['value_hash'])  # XxHash length
 
 
 if __name__ == '__main__':
