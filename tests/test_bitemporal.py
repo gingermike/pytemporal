@@ -538,3 +538,119 @@ def test_backfill_does_not_merge_tombstone_with_open_ended():
     # If merged incorrectly, effective_from would be 2024-01-01
     assert inserted['effective_from'] != pd.Timestamp('2024-01-01'), \
         "BUG: Record was incorrectly merged with tombstone!"
+
+
+def test_exact_match_with_multiple_current_records():
+    """
+    Test: When multiple current records have the same hash but different effective dates,
+    the algorithm should find the one with an exact temporal match.
+
+    Bug fix: Previously, the algorithm would stop at the FIRST matching hash and not
+    check if other records with the same hash had an exact temporal match.
+
+    Scenario:
+    - Current state has two records for ID (1, 2, 1):
+      - [2024-01-01, infinity) with hash 'a'  (Day 1)
+      - [2024-01-02, infinity) with hash 'a'  (Day 2)
+    - Update sends record [2024-01-02, infinity) with hash 'a'
+    - Expected: NO insert needed (exact match exists)
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'path_length'],
+        value_columns=['depth']
+    )
+
+    # Current state has two records for the same ID with same hash but different dates
+    current_state = pd.DataFrame([
+        # Day 1 record
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-01'),
+         'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-01'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+        # Day 2 record - same ID, same hash, different effective_from
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-02'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+    ])
+
+    # Update sends the same record as Day 2
+    update = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-02'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, update,
+        system_date='2024-01-02',
+        update_mode='full_state'
+    )
+
+    # No expiries needed - records are correct
+    assert len(expiries) == 0, "No expiries expected - records are correct"
+
+    # CRITICAL: No inserts needed - exact match exists
+    # Bug: Previously this would insert because it found 2024-01-01 first (non-exact match)
+    assert len(inserts) == 0, \
+        "BUG: Record was inserted even though exact match exists in current state"
+
+
+def test_exact_match_priority_over_adjacent():
+    """
+    Test: Exact match should have priority over adjacent match when searching.
+
+    Scenario:
+    - Current has adjacent record [2024-01-01, 2024-01-02) with same hash
+    - Current also has exact match [2024-01-02, infinity) with same hash
+    - Update sends [2024-01-02, infinity) with same hash
+    - Expected: Find exact match (no insert), NOT merge with adjacent
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'path_length'],
+        value_columns=['depth']
+    )
+
+    current_state = pd.DataFrame([
+        # Adjacent record (would be a merge candidate)
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-01'),
+         'effective_to': pd.Timestamp('2024-01-02'),  # Ends at 2024-01-02
+         'as_of_from': pd.Timestamp('2024-01-01'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+        # Exact match record
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-02'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+    ])
+
+    update = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-02'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, update,
+        system_date='2024-01-02',
+        update_mode='full_state'
+    )
+
+    # Should find exact match - no changes needed
+    assert len(expiries) == 0, "No expiries expected - exact match found"
+    assert len(inserts) == 0, \
+        "No inserts expected - exact match should be found, not merged with adjacent"

@@ -868,35 +868,46 @@ fn process_full_state_optimized(
             let update_temporal = get_temporal_bounds(updates_batch, update_idx)?;
 
             // Find if there's a matching current record (same hash)
-            let mut matching_current_idx: Option<usize> = None;
-            let mut is_adjacent = false;
-            let mut is_exact_match = false;
+            // Keep track of the best match type found so far
+            // Priority: exact match > adjacent > any match
+            let mut best_match_idx: Option<usize> = None;
+            let mut best_is_exact = false;
+            let mut best_is_adjacent = false;
 
             for &current_idx in current_row_indices {
                 let current_hash = current_hashes.value(current_idx);
 
                 if current_hash == update_hash {
                     // Found a matching value hash
-                    matching_current_idx = Some(current_idx);
                     let current_temporal = get_temporal_bounds(current_batch, current_idx)?;
 
                     // Check temporal relationship
-                    if are_segments_adjacent(
+                    if current_temporal == update_temporal {
+                        // Exact same temporal range with same values = no change
+                        // This is the best possible match - stop searching
+                        best_match_idx = Some(current_idx);
+                        best_is_exact = true;
+                        best_is_adjacent = false;
+                        break;
+                    } else if are_segments_adjacent(
                         current_temporal.0, current_temporal.1,
                         update_temporal.0, update_temporal.1
                     ) {
-                        is_adjacent = true;
-                    } else if current_temporal == update_temporal {
-                        // Exact same temporal range with same values = no change
-                        is_exact_match = true;
+                        // Adjacent match is better than no temporal relationship
+                        // But keep looking in case there's an exact match
+                        if !best_is_exact {
+                            best_match_idx = Some(current_idx);
+                            best_is_adjacent = true;
+                        }
+                    } else if best_match_idx.is_none() {
+                        // No better match found yet, record this one
+                        best_match_idx = Some(current_idx);
                     }
-
-                    break; // Found the matching record
                 }
             }
 
-            // Decision logic based on relationship
-            match (matching_current_idx, is_adjacent, is_exact_match) {
+            // Decision logic based on the best match found
+            match (best_match_idx, best_is_adjacent, best_is_exact) {
                 (Some(current_idx), true, _) => {
                     // Case 1: Adjacent segments with same values
                     // Check if we should prevent merging (tombstone + open-ended update)

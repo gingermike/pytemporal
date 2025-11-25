@@ -1233,3 +1233,80 @@ fn test_bounded_adjacent_segments_still_merge() {
         "Merged record should end at 2024-01-03"
     );
 }
+
+/// Test: When multiple current records have the same hash but different effective dates,
+/// the algorithm should find the one with an exact temporal match.
+///
+/// Bug fix: Previously, the algorithm would stop at the FIRST matching hash and not
+/// check if other records with the same hash had an exact temporal match.
+#[test]
+fn test_exact_match_with_multiple_current_records() {
+    // Current state has two records for the same ID with same hash but different dates
+    let current_state = create_batch(vec![
+        // Day 1 record
+        (1, "field1", 100, 10, "2024-01-01", "max", "2024-01-01", "max"),
+        // Day 2 record - same ID, same values (same hash), different effective_from
+        (1, "field1", 100, 10, "2024-01-02", "max", "2024-01-02", "max"),
+    ]);
+
+    // Update sends the same record as Day 2
+    let updates = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-02", "max", "2024-01-02", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false,
+    ).unwrap();
+
+    // No expiries needed - records are correct
+    assert!(changeset.to_expire.is_empty(), "No expiries expected - records are correct");
+
+    // CRITICAL: No inserts needed - exact match exists
+    // Bug: Previously this would insert because it found 2024-01-01 first (non-exact match)
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_inserts, 0,
+        "BUG: Record was inserted even though exact match exists in current state");
+}
+
+/// Test: Exact match should have priority over adjacent match when searching.
+#[test]
+fn test_exact_match_priority_over_adjacent() {
+    // Current state has adjacent record AND exact match with same hash
+    let current_state = create_batch(vec![
+        // Adjacent record (would be a merge candidate) - ends at 2024-01-02
+        (1, "field1", 100, 10, "2024-01-01", "2024-01-02", "2024-01-01", "max"),
+        // Exact match record - starts at 2024-01-02
+        (1, "field1", 100, 10, "2024-01-02", "max", "2024-01-02", "max"),
+    ]);
+
+    // Update sends record that exactly matches the second current record
+    let updates = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-02", "max", "2024-01-02", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false,
+    ).unwrap();
+
+    // Should find exact match - no changes needed
+    assert!(changeset.to_expire.is_empty(), "No expiries expected - exact match found");
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_inserts, 0,
+        "No inserts expected - exact match should be found, not merged with adjacent");
+}
