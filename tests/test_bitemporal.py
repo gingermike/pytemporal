@@ -347,3 +347,129 @@ def test_bitemporal_update_multiple_current():
     assert insert.loc[1]["effective_to"] == pd.to_datetime('2022-03-01')
     assert insert.loc[2]["effective_from"] == pd.to_datetime('2022-03-01')
     assert insert.loc[2]["effective_to"] == pd.to_datetime('2023-01-01')
+
+
+def test_backfill_skips_future_records():
+    """
+    Test: Backfill scenario - records with effective_from > system_date should NOT be tombstoned.
+
+    This tests the fix for the "invalid range" bug where tombstoning records during backfill
+    created effective_from > effective_to ranges, which violate database constraints.
+
+    Scenario:
+    - Current state has a record starting on 2024-01-02
+    - Backfill with system_date=2024-01-01 (earlier than existing record)
+    - The existing record should NOT be tombstoned (would create invalid range)
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=["parent_id", "child_id"],
+        value_columns=["path_length"]
+    )
+
+    # Current state: Record exists for Day 2
+    current_state = pd.DataFrame([
+        {
+            'parent_id': 2, 'child_id': 10, 'path_length': 1,
+            'effective_from': pd.Timestamp('2024-01-02'),  # Future date from backfill perspective
+            'effective_to': INFINITY_TIMESTAMP,
+            'as_of_from': pd.Timestamp('2024-01-02'),
+            'as_of_to': INFINITY_TIMESTAMP,
+            'value_hash': 'existing_record'
+        }
+    ])
+
+    # Incoming: Backfill Day 1 data (doesn't include the Day 2 record)
+    incoming_data = pd.DataFrame([
+        {
+            'parent_id': 1, 'child_id': 2, 'path_length': 1,
+            'effective_from': pd.Timestamp('2024-01-01'),
+            'effective_to': pd.Timestamp('2024-01-02'),
+            'as_of_from': pd.Timestamp('2024-01-01'),
+            'as_of_to': INFINITY_TIMESTAMP,
+            'value_hash': 'backfill_record'
+        }
+    ])
+
+    # Backfill date is BEFORE the existing record's effective_from
+    expiries, inserts = processor.compute_changes(
+        current_state, incoming_data,
+        system_date='2024-01-01',  # Backfill date - earlier than existing record
+        update_mode='full_state'   # This mode expires missing records
+    )
+
+    # The record with parent_id=2 should NOT be expired because:
+    # - Its effective_from (2024-01-02) > system_date (2024-01-01)
+    # - Tombstoning it would create an invalid range: effective_from > effective_to
+    assert len(expiries) == 0, "No records should be expired when their effective_from > system_date"
+
+    # Only the backfill record should be inserted (no tombstone for the "future" record)
+    assert len(inserts) == 1, "Only the backfill record should be inserted"
+    assert inserts.iloc[0]['parent_id'] == 1, "Inserted record should be the backfill record"
+
+    # CRITICAL: Verify no inserted record has effective_from > effective_to
+    for i, row in inserts.iterrows():
+        eff_from = row['effective_from']
+        eff_to = row['effective_to']
+        # Skip infinity check (infinity is always valid)
+        if eff_to != INFINITY_TIMESTAMP:
+            assert eff_from <= eff_to, \
+                f"Invalid range detected: effective_from ({eff_from}) > effective_to ({eff_to})"
+
+
+def test_backfill_mixed_tombstone_eligibility():
+    """
+    Test: Backfill with mixed records - some valid to tombstone, some not.
+
+    This tests that the filter correctly handles a mix of:
+    - Records that CAN be tombstoned (effective_from <= system_date)
+    - Records that should be SKIPPED (effective_from > system_date)
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=["id", "field"],
+        value_columns=["mv", "price"]
+    )
+
+    # Current state: Mix of records with different effective_from dates
+    current_state = pd.DataFrame([
+        # Record starting BEFORE backfill date - CAN be tombstoned
+        [1, "test", 10, 20, pd.Timestamp("2024-01-01"), INFINITY_TIMESTAMP,
+         pd.Timestamp("2024-01-01"), INFINITY_TIMESTAMP],
+        # Record starting ON backfill date - CAN be tombstoned
+        [2, "test", 30, 40, pd.Timestamp("2024-01-05"), INFINITY_TIMESTAMP,
+         pd.Timestamp("2024-01-05"), INFINITY_TIMESTAMP],
+        # Record starting AFTER backfill date - should NOT be tombstoned
+        [3, "test", 50, 60, pd.Timestamp("2024-01-10"), INFINITY_TIMESTAMP,
+         pd.Timestamp("2024-01-10"), INFINITY_TIMESTAMP],
+    ], columns=["id", "field", "mv", "price", "effective_from", "effective_to",
+                "as_of_from", "as_of_to"])
+
+    # Backfill with no updates for existing IDs (all would be considered for tombstoning)
+    updates = pd.DataFrame([
+        [99, "test", 100, 200, pd.Timestamp("2024-01-01"), pd.Timestamp("2024-01-05"),
+         pd.Timestamp("2024-01-01"), INFINITY_TIMESTAMP],
+    ], columns=["id", "field", "mv", "price", "effective_from", "effective_to",
+                "as_of_from", "as_of_to"])
+
+    # System date is 2024-01-05 (midpoint)
+    expiries, inserts = processor.compute_changes(
+        current_state, updates,
+        system_date='2024-01-05',
+        update_mode='full_state'
+    )
+
+    # Records id=1 and id=2 should be expired (effective_from <= system_date)
+    # Record id=3 should NOT be expired (effective_from > system_date)
+    assert len(expiries) == 2, "Only records with effective_from <= system_date should be expired"
+
+    expired_ids = set(expiries['id'].tolist())
+    assert 1 in expired_ids, "Record id=1 should be expired"
+    assert 2 in expired_ids, "Record id=2 should be expired"
+    assert 3 not in expired_ids, "Record id=3 should NOT be expired (effective_from > system_date)"
+
+    # CRITICAL: Verify no inserted record has effective_from > effective_to
+    for i, row in inserts.iterrows():
+        eff_from = row['effective_from']
+        eff_to = row['effective_to']
+        if eff_to != INFINITY_TIMESTAMP:
+            assert eff_from <= eff_to, \
+                f"Invalid range detected at row {i}: effective_from ({eff_from}) > effective_to ({eff_to})"

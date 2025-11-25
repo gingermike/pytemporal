@@ -139,24 +139,41 @@ fn handle_empty_inputs(
     // No updates - handle based on mode
     if updates.num_rows() == 0 {
         return if update_mode == UpdateMode::FullState && current_state.num_rows() > 0 {
-            // Create tombstones for all current records in full state mode
-            let current_indices: Vec<usize> = (0..current_state.num_rows()).collect();
+            // Create tombstones for current records in full state mode
+            // Filter to only include records where effective_from <= system_date
+            // (records with effective_from > system_date would create invalid ranges)
+            let all_indices: Vec<usize> = (0..current_state.num_rows()).collect();
+            let tombstone_indices = filter_indices_for_tombstoning(
+                current_state,
+                &all_indices,
+                system_date,
+            )?;
+
+            // If no valid records to tombstone, return empty changeset
+            if tombstone_indices.is_empty() {
+                return Ok(Some(ChangeSet {
+                    to_expire: Vec::new(),
+                    to_insert: Vec::new(),
+                    expired_records: Vec::new(),
+                }));
+            }
+
             let tombstone_batch = create_tombstone_records_optimized(
-                &current_indices,
+                &tombstone_indices,
                 current_state,
                 value_columns,
                 system_date,
                 batch_timestamp,
             )?;
-            
+
             let expired_batch = crate::batch_utils::create_expired_records_batch(
-                current_state, 
-                &current_indices, 
+                current_state,
+                &tombstone_indices,
                 batch_timestamp
             )?;
-            
+
             Ok(Some(ChangeSet {
-                to_expire: current_indices,
+                to_expire: tombstone_indices,
                 to_insert: vec![tombstone_batch],
                 expired_records: vec![expired_batch],
             }))
@@ -409,14 +426,21 @@ fn process_id_group_optimized(
     // Quick path: No updates for this ID group
     if update_row_indices.is_empty() {
         if update_mode == UpdateMode::FullState {
-            // In full state mode, expire all current records for IDs not in updates
-            expire_indices.extend(current_row_indices.iter().cloned());
-            
-            // Create tombstone records - but only convert to BitemporalRecord when needed
-            if !current_row_indices.is_empty() {
+            // In full state mode, expire current records for IDs not in updates
+            // Filter to only include records where effective_from <= system_date
+            // (records with effective_from > system_date would create invalid ranges)
+            let tombstone_indices = filter_indices_for_tombstoning(
+                current_batch,
+                current_row_indices,
+                system_date,
+            )?;
+
+            if !tombstone_indices.is_empty() {
+                expire_indices.extend(tombstone_indices.iter().cloned());
+
                 // Use the consistent timestamp from the updates batch for tombstones
                 let tombstone_records = create_tombstone_records_optimized(
-                    current_row_indices,
+                    &tombstone_indices,
                     current_batch,
                     value_columns,
                     system_date,
@@ -592,6 +616,48 @@ fn create_tombstone_records_optimized(
     
     arrow::array::RecordBatch::try_new(schema, columns)
         .map_err(|e| format!("Failed to create tombstone batch: {}", e))
+}
+
+/// Filter row indices to only include records whose effective_from <= system_date.
+/// This prevents creating invalid tombstone records during backfill scenarios where
+/// system_date is earlier than existing records' effective_from dates.
+///
+/// Returns the filtered indices and emits a warning to stderr if any records were skipped.
+/// Skipped records represent "future" data from the perspective of the backfill date
+/// and should not be tombstoned (they remain unchanged in the database).
+fn filter_indices_for_tombstoning(
+    batch: &RecordBatch,
+    indices: &[usize],
+    system_date: NaiveDate,
+) -> Result<Vec<usize>, String> {
+    let eff_from_array = batch.column_by_name("effective_from")
+        .ok_or("effective_from column not found")?;
+
+    let system_date_time = system_date.and_hms_opt(0, 0, 0).unwrap();
+
+    let mut valid_indices = Vec::with_capacity(indices.len());
+    let mut skipped_count = 0usize;
+
+    for &idx in indices {
+        let effective_from = extract_datetime_flexible(eff_from_array.as_ref(), idx)?;
+        if effective_from <= system_date_time {
+            valid_indices.push(idx);
+        } else {
+            skipped_count += 1;
+        }
+    }
+
+    if skipped_count > 0 {
+        eprintln!(
+            "pytemporal warning: Skipped {} record(s) during full_state tombstoning because \
+             their effective_from date is after system_date ({}). These records represent \
+             'future' data from the backfill perspective and will remain unchanged.",
+            skipped_count,
+            system_date
+        );
+    }
+
+    Ok(valid_indices)
 }
 
 /// Extract temporal bounds (effective_from, effective_to) for a record

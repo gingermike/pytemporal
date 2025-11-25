@@ -931,3 +931,147 @@ fn test_conflation_different_fields() {
     };
     run_conflation_scenario(&scenario);
 }
+
+/// Test: Backfill scenario - records with effective_from > system_date should NOT be tombstoned
+///
+/// This tests the fix for the "invalid range" bug where tombstoning records during backfill
+/// created effective_from > effective_to ranges, which violate database constraints.
+///
+/// Scenario:
+/// - Current state has a record starting on 2024-01-02
+/// - Backfill with system_date=2024-01-01 (earlier than existing record)
+/// - The existing record should NOT be tombstoned (would create invalid range)
+#[test]
+fn test_backfill_skips_future_records() {
+    // Current state: Record exists starting Day 2 (2024-01-02)
+    // This represents "future" data from the perspective of the backfill
+    let current_state = create_batch(vec![
+        // Record that starts AFTER the backfill date - should NOT be tombstoned
+        (2, "field_a", 100, 200, "2024-01-02", "max", "2024-01-02", "max"),
+    ]);
+
+    // Backfill: Insert data for Day 1 (2024-01-01) - doesn't include the Day 2 record
+    let updates = create_batch(vec![
+        (1, "field_a", 50, 100, "2024-01-01", "2024-01-02", "2024-01-01", "max"),
+    ]);
+
+    // System date is 2024-01-01 (the backfill date)
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string(), "field".to_string()],
+        vec!["mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false, // conflate_inputs = false
+    ).unwrap();
+
+    // The record with id=2 should NOT be expired because:
+    // - Its effective_from (2024-01-02) > system_date (2024-01-01)
+    // - Tombstoning it would create an invalid range: effective_from > effective_to
+    assert!(
+        changeset.to_expire.is_empty(),
+        "No records should be expired when their effective_from > system_date"
+    );
+
+    // Only the backfill record (id=1) should be inserted
+    assert_eq!(changeset.to_insert.len(), 1, "Only the backfill record should be inserted");
+
+    // Verify the inserted record is the backfill data, not a tombstone
+    let insert_batch = &changeset.to_insert[0];
+    let id_array = insert_batch.column_by_name("id")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    assert_eq!(id_array.value(0), 1, "Inserted record should be the backfill record with id=1");
+}
+
+/// Test: Backfill with mixed records - some valid to tombstone, some not
+///
+/// This tests that the filter correctly handles a mix of:
+/// - Records that CAN be tombstoned (effective_from <= system_date)
+/// - Records that should be SKIPPED (effective_from > system_date)
+#[test]
+fn test_backfill_mixed_tombstone_eligibility() {
+    // Current state: Mix of records
+    let current_state = create_batch(vec![
+        // Record starting BEFORE backfill date - CAN be tombstoned
+        (1, "field_a", 10, 20, "2024-01-01", "max", "2024-01-01", "max"),
+        // Record starting ON backfill date - CAN be tombstoned (effective_from == system_date)
+        (2, "field_a", 30, 40, "2024-01-05", "max", "2024-01-05", "max"),
+        // Record starting AFTER backfill date - should NOT be tombstoned
+        (3, "field_a", 50, 60, "2024-01-10", "max", "2024-01-10", "max"),
+    ]);
+
+    // Backfill with no updates for any existing IDs (all should be considered for tombstoning)
+    let updates = create_batch(vec![
+        (99, "field_a", 100, 200, "2024-01-01", "2024-01-05", "2024-01-01", "max"),
+    ]);
+
+    // System date is 2024-01-05 (midpoint)
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 5).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string(), "field".to_string()],
+        vec!["mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false,
+    ).unwrap();
+
+    // Records id=1 and id=2 should be expired (effective_from <= system_date)
+    // Record id=3 should NOT be expired (effective_from > system_date)
+    assert_eq!(
+        changeset.to_expire.len(), 2,
+        "Only records with effective_from <= system_date should be expired"
+    );
+
+    // Verify the expired records are id=1 and id=2
+    let expired_ids: Vec<i32> = changeset.to_expire.iter()
+        .map(|&idx| {
+            current_state.column_by_name("id")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(idx)
+        })
+        .collect();
+    assert!(expired_ids.contains(&1), "Record id=1 should be expired");
+    assert!(expired_ids.contains(&2), "Record id=2 should be expired");
+    assert!(!expired_ids.contains(&3), "Record id=3 should NOT be expired (effective_from > system_date)");
+
+    // Verify tombstones are created only for eligible records (2 tombstones + 1 insert = need to check)
+    // The inserts should contain: 2 tombstones for id=1,2 + 1 regular insert for id=99
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_inserts, 3, "Should have 2 tombstones + 1 regular insert");
+
+    // Verify no tombstone has effective_from > effective_to
+    for batch in &changeset.to_insert {
+        let eff_from_array = batch.column_by_name("effective_from")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        let eff_to_array = batch.column_by_name("effective_to")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+
+        for i in 0..batch.num_rows() {
+            let eff_from = eff_from_array.value(i);
+            let eff_to = eff_to_array.value(i);
+            assert!(
+                eff_from <= eff_to,
+                "Invalid range detected: effective_from ({}) > effective_to ({})",
+                eff_from, eff_to
+            );
+        }
+    }
+}
