@@ -473,3 +473,68 @@ def test_backfill_mixed_tombstone_eligibility():
         if eff_to != INFINITY_TIMESTAMP:
             assert eff_from <= eff_to, \
                 f"Invalid range detected at row {i}: effective_from ({eff_from}) > effective_to ({eff_to})"
+
+
+def test_backfill_does_not_merge_tombstone_with_open_ended():
+    """
+    Test: Backfill should NOT merge tombstones with open-ended updates.
+
+    This tests the fix for the "missing inserts during backfill" bug where
+    tombstones (bounded records) were incorrectly merged with open-ended updates,
+    causing the update to be lost.
+
+    Scenario:
+    - Day 1: Record exists [2024-01-01, infinity)
+    - Day 2: Record is tombstoned [2024-01-01, 2024-01-02) because it was removed
+    - Backfill: Re-add the record for Day 2 [2024-01-02, infinity)
+    - Expected: Insert the new record separately, DON'T merge with tombstone
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'path_length'],
+        value_columns=['depth']
+    )
+
+    # Current state after Day 2: contains the tombstone from Day 1
+    current_state = pd.DataFrame([
+        # Tombstone: record was closed at Day 2
+        {'parent_id': 2, 'child_id': 3, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-01'),
+         'effective_to': pd.Timestamp('2024-01-02'),  # BOUNDED - tombstone
+         'as_of_from': pd.Timestamp('2024-01-02'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},
+    ])
+
+    # Backfill: Re-add the record for Day 2
+    backfill = pd.DataFrame([
+        {'parent_id': 2, 'child_id': 3, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': INFINITY_TIMESTAMP,  # OPEN-ENDED
+         'as_of_from': pd.Timestamp('2024-01-02'),
+         'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'hash_a'},  # Same hash as tombstone
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, backfill,
+        system_date='2024-01-02',
+        update_mode='full_state'
+    )
+
+    # The tombstone should NOT be expired (it's historical record)
+    assert len(expiries) == 0, "Tombstone should not be expired during backfill"
+
+    # The new record should be inserted separately (not merged with tombstone)
+    assert len(inserts) == 1, "Backfill record should be inserted"
+
+    # Verify the inserted record has the correct temporal range
+    inserted = inserts.iloc[0]
+    assert inserted['effective_from'] == pd.Timestamp('2024-01-02'), \
+        "Inserted record should start at 2024-01-02"
+    assert inserted['effective_to'] == INFINITY_TIMESTAMP, \
+        "Inserted record should be open-ended"
+
+    # CRITICAL: The insert should NOT have been merged with the tombstone
+    # If merged incorrectly, effective_from would be 2024-01-01
+    assert inserted['effective_from'] != pd.Timestamp('2024-01-01'), \
+        "BUG: Record was incorrectly merged with tombstone!"

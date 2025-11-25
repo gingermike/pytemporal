@@ -1,5 +1,5 @@
 use arrow::array::{RecordBatch};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
 use rustc_hash::FxHashMap;
@@ -690,6 +690,29 @@ fn are_segments_adjacent(
     seg1_to == seg2_from || seg2_to == seg1_from
 }
 
+/// Check if a temporal endpoint is "open-ended" (at or near infinity).
+/// We use year >= 2200 as the threshold to detect infinity timestamps, which accommodates
+/// both Python's INFINITY_TIMESTAMP (2260-12-31) and Rust's MAX_TIMESTAMP (2262-04-11).
+#[inline]
+fn is_open_ended(effective_to: NaiveDateTime) -> bool {
+    effective_to.date().year() >= 2200
+}
+
+/// Check if merging two adjacent segments should be prevented.
+///
+/// Returns true if:
+/// - Current record is bounded (closed, like a tombstone with effective_to < infinity)
+/// - Update record is open-ended (effective_to ≈ infinity)
+///
+/// This prevents "reopening" a tombstone during backfill scenarios where:
+/// - A tombstone [2024-01-01, 2024-01-02) exists (historical closure)
+/// - An incoming update [2024-01-02, infinity) arrives (new knowledge)
+/// - Without this check, they would merge to [2024-01-01, infinity), losing the closure
+#[inline]
+fn should_prevent_merge(current_effective_to: NaiveDateTime, update_effective_to: NaiveDateTime) -> bool {
+    !is_open_ended(current_effective_to) && is_open_ended(update_effective_to)
+}
+
 /// Create a merged temporal segment from records across two batches
 /// Used when adjacent segments have identical values and should be coalesced
 fn create_merged_segment_cross_batch(
@@ -875,16 +898,28 @@ fn process_full_state_optimized(
             // Decision logic based on relationship
             match (matching_current_idx, is_adjacent, is_exact_match) {
                 (Some(current_idx), true, _) => {
-                    // Case 1: Adjacent segments with same values -> MERGE
-                    expire_indices.push(current_idx);
-                    let merged_batch = create_merged_segment_cross_batch(
-                        current_batch,
-                        updates_batch,
-                        current_idx,
-                        update_idx,
-                        _batch_timestamp,
-                    )?;
-                    insert_batches.push(merged_batch);
+                    // Case 1: Adjacent segments with same values
+                    // Check if we should prevent merging (tombstone + open-ended update)
+                    let current_temporal = get_temporal_bounds(current_batch, current_idx)?;
+
+                    if should_prevent_merge(current_temporal.1, update_temporal.1) {
+                        // Current is a tombstone (bounded) and update is open-ended
+                        // DON'T merge - this preserves the historical tombstone and adds
+                        // the new record as a distinct temporal segment
+                        // (important for backfill scenarios)
+                        updates_to_insert.push(update_idx);
+                    } else {
+                        // Safe to merge: either both bounded, both open, or extending backward
+                        expire_indices.push(current_idx);
+                        let merged_batch = create_merged_segment_cross_batch(
+                            current_batch,
+                            updates_batch,
+                            current_idx,
+                            update_idx,
+                            _batch_timestamp,
+                        )?;
+                        insert_batches.push(merged_batch);
+                    }
                 },
                 (Some(_), false, true) => {
                     // Case 2: Exact same temporal range with same values -> NO CHANGE

@@ -1,5 +1,5 @@
 use pytemporal::{process_updates, UpdateMode};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use arrow::array::{TimestampMicrosecondArray, Int32Array, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
@@ -1074,4 +1074,162 @@ fn test_backfill_mixed_tombstone_eligibility() {
             );
         }
     }
+}
+
+/// Test: Backfill should NOT merge tombstones with open-ended updates.
+///
+/// This tests the fix for the "missing inserts during backfill" bug where
+/// tombstones (bounded records) were incorrectly merged with open-ended updates,
+/// causing the update to be lost.
+///
+/// Scenario:
+/// - Current state has a tombstone [2024-01-01, 2024-01-02) - bounded/closed
+/// - Backfill incoming has [2024-01-02, infinity) - open-ended
+/// - Same ID and hash (adjacent segments with same values)
+/// - Expected: Insert the new record separately, DON'T merge with tombstone
+#[test]
+fn test_backfill_does_not_merge_tombstone_with_open_ended() {
+    // Current state: tombstone (bounded record that was closed)
+    let current_state = create_batch(vec![
+        // Tombstone: record was closed at 2024-01-02
+        (2, "field_a", 100, 200, "2024-01-01", "2024-01-02", "2024-01-02", "max"),
+    ]);
+
+    // Backfill: re-add the record for Day 2 with open-ended effective_to
+    let updates = create_batch(vec![
+        // Same ID (2, field_a) and same values (100, 200) = same hash
+        // But effective range is [2024-01-02, infinity) - open-ended
+        (2, "field_a", 100, 200, "2024-01-02", "max", "2024-01-02", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string(), "field".to_string()],
+        vec!["mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false, // conflate_inputs = false
+    ).unwrap();
+
+    // The tombstone should NOT be expired (it's historical record)
+    assert!(
+        changeset.to_expire.is_empty(),
+        "Tombstone should not be expired during backfill"
+    );
+
+    // The new record should be inserted separately (not merged with tombstone)
+    assert_eq!(
+        changeset.to_insert.len(), 1,
+        "Backfill record should be inserted"
+    );
+
+    // Verify the inserted record has the correct temporal range
+    let insert_batch = &changeset.to_insert[0];
+    assert_eq!(insert_batch.num_rows(), 1, "Should have exactly one inserted record");
+
+    let eff_from_array = insert_batch.column_by_name("effective_from")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let eff_to_array = insert_batch.column_by_name("effective_to")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    let eff_from = eff_from_array.value(0);
+    let eff_to = eff_to_array.value(0);
+
+    // Convert to dates for comparison
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    let inserted_from = epoch + chrono::Duration::microseconds(eff_from);
+    let inserted_to = epoch + chrono::Duration::microseconds(eff_to);
+
+    // The inserted record should start at 2024-01-02, NOT 2024-01-01
+    // If merged incorrectly, effective_from would be 2024-01-01
+    assert_eq!(
+        inserted_from.date(),
+        NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+        "Inserted record should start at 2024-01-02, not merged with tombstone"
+    );
+
+    // The inserted record should be open-ended (year >= 2200)
+    assert!(
+        inserted_to.date().year() >= 2200,
+        "Inserted record should be open-ended (effective_to at infinity)"
+    );
+}
+
+/// Test: Bounded + bounded adjacent segments SHOULD still merge
+///
+/// This ensures the fix for tombstone merging doesn't break the valid
+/// use case of merging two bounded adjacent segments with same values.
+#[test]
+fn test_bounded_adjacent_segments_still_merge() {
+    // Current state: bounded record [2024-01-02, 2024-01-03)
+    let current_state = create_batch(vec![
+        (1, "field_a", 50, 100, "2024-01-02", "2024-01-03", "2024-01-01", "max"),
+    ]);
+
+    // Update: bounded record [2024-01-01, 2024-01-02) - adjacent to current
+    // Same values = same hash
+    let updates = create_batch(vec![
+        (1, "field_a", 50, 100, "2024-01-01", "2024-01-02", "2024-01-02", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string(), "field".to_string()],
+        vec!["mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false,
+    ).unwrap();
+
+    // Current record SHOULD be expired (we're merging)
+    assert_eq!(
+        changeset.to_expire.len(), 1,
+        "Current bounded record should be expired for merging"
+    );
+
+    // Should have one merged record
+    assert_eq!(
+        changeset.to_insert.len(), 1,
+        "Should have one merged record"
+    );
+
+    // Verify the merged record spans [2024-01-01, 2024-01-03)
+    let insert_batch = &changeset.to_insert[0];
+    let eff_from_array = insert_batch.column_by_name("effective_from")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let eff_to_array = insert_batch.column_by_name("effective_to")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    let merged_from = epoch + chrono::Duration::microseconds(eff_from_array.value(0));
+    let merged_to = epoch + chrono::Duration::microseconds(eff_to_array.value(0));
+
+    assert_eq!(
+        merged_from.date(),
+        NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        "Merged record should start at 2024-01-01"
+    );
+    assert_eq!(
+        merged_to.date(),
+        NaiveDate::from_ymd_opt(2024, 1, 3).unwrap(),
+        "Merged record should end at 2024-01-03"
+    );
 }
