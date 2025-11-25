@@ -1310,3 +1310,44 @@ fn test_exact_match_priority_over_adjacent() {
     assert_eq!(total_inserts, 0,
         "No inserts expected - exact match should be found, not merged with adjacent");
 }
+
+/// Test: Records with same hash but different IDs should NOT be deduplicated.
+///
+/// Bug fix: The deduplication logic was incorrectly treating records as duplicates
+/// if they had the same (effective_from, effective_to, value_hash), ignoring ID columns.
+#[test]
+fn test_deduplication_with_same_hash_different_ids() {
+    // Current state: A->B (id=1) with value that produces a specific hash
+    let current_state = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-01", "max", "2024-01-01", "max"),
+    ]);
+
+    // Incoming: A->B plus two NEW records B->C and C->D with same values (same hash)
+    // All have id=1, id=2, id=3 respectively
+    let updates = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-01", "max", "2024-01-01", "max"),  // A->B exists
+        (2, "field1", 100, 10, "2024-01-01", "max", "2024-01-01", "max"),  // B->C NEW (same values = same hash)
+        (3, "field1", 100, 10, "2024-01-01", "max", "2024-01-01", "max"),  // C->D NEW (same values = same hash)
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false,
+    ).unwrap();
+
+    // No expiries expected
+    assert!(changeset.to_expire.is_empty(), "No expiries expected");
+
+    // Should insert 2 records (id=2 and id=3), NOT deduplicate them
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total_inserts, 2,
+        "BUG: Expected 2 inserts but got {}. Records with same hash but different IDs were incorrectly deduplicated.",
+        total_inserts);
+}

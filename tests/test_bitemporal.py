@@ -603,6 +603,65 @@ def test_exact_match_with_multiple_current_records():
         "BUG: Record was inserted even though exact match exists in current state"
 
 
+def test_deduplication_with_same_hash_different_ids():
+    """
+    Test: Records with same hash but different IDs should NOT be deduplicated.
+
+    Bug fix: The deduplication logic was incorrectly treating records as duplicates
+    if they had the same (effective_from, effective_to, value_hash), ignoring ID columns.
+    This caused records from different ID groups to be incorrectly dropped.
+
+    Scenario:
+    - Current state: A->B (1->2) with hash 'same_hash'
+    - Incoming: A->B (1->2), B->C (2->3), A->C (1->3) all with 'same_hash'
+    - Expected: Insert B->C and A->C (new IDs), skip A->B (already exists)
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'path_length'],
+        value_columns=['depth']
+    )
+
+    current_state = pd.DataFrame([{
+        'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+        'effective_from': pd.Timestamp('2024-01-01'),
+        'effective_to': INFINITY_TIMESTAMP,
+        'as_of_from': pd.Timestamp('2024-01-01'),
+        'as_of_to': INFINITY_TIMESTAMP,
+        'value_hash': 'same_hash'
+    }])
+
+    incoming = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'path_length': 1, 'depth': 0,
+         'effective_from': pd.Timestamp('2024-01-01'), 'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-01'), 'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'same_hash'},
+        {'parent_id': 2, 'child_id': 3, 'path_length': 1, 'depth': 0,  # B->C - NEW
+         'effective_from': pd.Timestamp('2024-01-01'), 'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-01'), 'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'same_hash'},
+        {'parent_id': 1, 'child_id': 3, 'path_length': 2, 'depth': 0,  # A->C - NEW
+         'effective_from': pd.Timestamp('2024-01-01'), 'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-01'), 'as_of_to': INFINITY_TIMESTAMP,
+         'value_hash': 'same_hash'},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, incoming,
+        system_date='2024-01-01',
+        update_mode='full_state'
+    )
+
+    assert len(expiries) == 0, "No expiries expected"
+    assert len(inserts) == 2, \
+        f"Expected 2 inserts (B->C and A->C), got {len(inserts)}"
+
+    # Verify the correct records were inserted
+    has_bc = any((inserts['parent_id'] == 2) & (inserts['child_id'] == 3))
+    has_ac = any((inserts['parent_id'] == 1) & (inserts['child_id'] == 3))
+    assert has_bc, "BUG: B->C (2->3) was incorrectly deduplicated"
+    assert has_ac, "BUG: A->C (1->3) was incorrectly deduplicated"
+
+
 def test_exact_match_priority_over_adjacent():
     """
     Test: Exact match should have priority over adjacent match when searching.

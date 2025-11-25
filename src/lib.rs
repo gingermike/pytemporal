@@ -94,7 +94,7 @@ pub fn process_updates_with_algorithm(
     // Phase 3: Post-processing and changeset building
     let phase3_start = std::time::Instant::now();
     let changeset = build_final_changeset(
-        to_expire, to_insert, &current_state, batch_timestamp
+        to_expire, to_insert, &current_state, batch_timestamp, &id_columns
     )?;
     let _phase3_total = phase3_start.elapsed();
     
@@ -298,7 +298,7 @@ fn process_all_id_groups(
             // MEMORY OPTIMIZATION: Incremental consolidation to prevent memory buildup
             // Apply deduplication + consolidation when we have too many small batches
             if to_insert.len() > 200 {
-                to_insert = crate::conflation::deduplicate_record_batches(to_insert)?;
+                to_insert = crate::conflation::deduplicate_record_batches(to_insert, id_columns)?;
                 to_insert = crate::conflation::consolidate_final_batches(to_insert)?;
             }
         }
@@ -317,19 +317,19 @@ fn process_all_id_groups(
                 update_mode,
                 batch_timestamp,
             )?;
-            
+
             to_expire.extend(expire_indices);
             to_insert.extend(insert_batches);
-            
+
             // MEMORY OPTIMIZATION: Incremental consolidation to prevent memory buildup
             // Apply deduplication + consolidation when we have too many small batches
             if to_insert.len() > 200 {
-                to_insert = crate::conflation::deduplicate_record_batches(to_insert)?;
+                to_insert = crate::conflation::deduplicate_record_batches(to_insert, id_columns)?;
                 to_insert = crate::conflation::consolidate_final_batches(to_insert)?;
             }
         }
     }
-    
+
     Ok((to_expire, to_insert))
 }
 
@@ -339,13 +339,14 @@ fn build_final_changeset(
     mut to_insert: Vec<RecordBatch>,
     current_state: &RecordBatch,
     batch_timestamp: chrono::NaiveDateTime,
+    id_columns: &[String],
 ) -> Result<ChangeSet, String> {
     // Sort and deduplicate expiry indices
     to_expire.sort_unstable();
     to_expire.dedup();
-    
+
     // Apply all post-processing optimizations to insert batches
-    to_insert = deduplicate_record_batches(to_insert)?;
+    to_insert = deduplicate_record_batches(to_insert, id_columns)?;
     to_insert = simple_conflate_batches(to_insert)?;
     to_insert = consolidate_final_batches(to_insert)?;
     

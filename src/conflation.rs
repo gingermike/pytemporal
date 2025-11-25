@@ -157,55 +157,117 @@ fn extend_batch_to_date(batch: RecordBatch, new_effective_to: NaiveDateTime) -> 
         .map_err(|e| e.to_string())
 }
 
-pub fn deduplicate_record_batches(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, String> {
+pub fn deduplicate_record_batches(batches: Vec<RecordBatch>, id_columns: &[String]) -> Result<Vec<RecordBatch>, String> {
     if batches.is_empty() {
         return Ok(Vec::new());
     }
-    
+
     // Convert RecordBatches to a more workable format for deduplication
-    let mut records: Vec<(NaiveDateTime, NaiveDateTime, String, RecordBatch)> = Vec::new();
-    
+    // KEY FIX: Include ID columns in the deduplication key to prevent incorrectly
+    // deduplicating records with same temporal bounds/hash but different IDs
+    let mut records: Vec<(String, NaiveDateTime, NaiveDateTime, String, RecordBatch)> = Vec::new();
+
     for batch in batches {
         if batch.num_rows() == 1 {
+            // Extract ID key from the batch
+            let id_key = extract_id_key(&batch, 0, id_columns)?;
+
             // Extract timestamps handling both microsecond and nanosecond precision
             let eff_from = extract_timestamp_as_datetime(batch.column_by_name("effective_from").unwrap(), 0)?;
             let eff_to = extract_timestamp_as_datetime(batch.column_by_name("effective_to").unwrap(), 0)?;
-            
+
             let hash_array = batch.column_by_name("value_hash").unwrap()
                 .as_any().downcast_ref::<StringArray>().unwrap();
-            
+
             let hash = hash_array.value(0).to_string();
-            
-            records.push((eff_from, eff_to, hash, batch));
+
+            records.push((id_key, eff_from, eff_to, hash, batch));
         }
     }
-    
-    // Sort by effective_from, then effective_to, then hash
+
+    // Sort by id_key, then effective_from, then effective_to, then hash
     records.sort_by(|a, b| {
         match a.0.cmp(&b.0) {
             std::cmp::Ordering::Equal => {
                 match a.1.cmp(&b.1) {
-                    std::cmp::Ordering::Equal => a.2.cmp(&b.2),
+                    std::cmp::Ordering::Equal => {
+                        match a.2.cmp(&b.2) {
+                            std::cmp::Ordering::Equal => a.3.cmp(&b.3),
+                            other => other,
+                        }
+                    }
                     other => other,
                 }
             }
             other => other,
         }
     });
-    
-    // Remove exact duplicates
+
+    // Remove exact duplicates (same ID + temporal bounds + hash)
     let mut deduped: Vec<RecordBatch> = Vec::new();
-    let mut last_key: Option<(NaiveDateTime, NaiveDateTime, String)> = None;
-    
-    for (eff_from, eff_to, hash, batch) in records {
-        let current_key = (eff_from, eff_to, hash);
+    let mut last_key: Option<(String, NaiveDateTime, NaiveDateTime, String)> = None;
+
+    for (id_key, eff_from, eff_to, hash, batch) in records {
+        let current_key = (id_key, eff_from, eff_to, hash);
         if last_key != Some(current_key.clone()) {
             deduped.push(batch);
             last_key = Some(current_key);
         }
     }
-    
+
     Ok(deduped)
+}
+
+/// Extract ID column values as a string key for deduplication
+fn extract_id_key(batch: &RecordBatch, row_idx: usize, id_columns: &[String]) -> Result<String, String> {
+    let mut key_parts: Vec<String> = Vec::new();
+
+    for col_name in id_columns {
+        let column = batch.column_by_name(col_name)
+            .ok_or_else(|| format!("Missing ID column: {}", col_name))?;
+
+        let value_str = extract_column_value(column.as_ref(), row_idx)?;
+        key_parts.push(value_str);
+    }
+
+    Ok(key_parts.join("|"))
+}
+
+/// Extract a single column value as a string
+fn extract_column_value(column: &dyn arrow::array::Array, idx: usize) -> Result<String, String> {
+    use arrow::array::*;
+    use arrow::datatypes::DataType;
+
+    if column.is_null(idx) {
+        return Ok("NULL".to_string());
+    }
+
+    match column.data_type() {
+        DataType::Int32 => {
+            let arr = column.as_any().downcast_ref::<Int32Array>()
+                .ok_or("Failed to downcast to Int32Array")?;
+            Ok(arr.value(idx).to_string())
+        }
+        DataType::Int64 => {
+            let arr = column.as_any().downcast_ref::<Int64Array>()
+                .ok_or("Failed to downcast to Int64Array")?;
+            Ok(arr.value(idx).to_string())
+        }
+        DataType::Utf8 => {
+            let arr = column.as_any().downcast_ref::<StringArray>()
+                .ok_or("Failed to downcast to StringArray")?;
+            Ok(arr.value(idx).to_string())
+        }
+        DataType::LargeUtf8 => {
+            let arr = column.as_any().downcast_ref::<LargeStringArray>()
+                .ok_or("Failed to downcast to LargeStringArray")?;
+            Ok(arr.value(idx).to_string())
+        }
+        _ => {
+            // For other types, use debug format (uncommon for ID columns)
+            Ok(format!("{:?}@{}", column.data_type(), idx))
+        }
+    }
 }
 
 /// Conflate consecutive input update records with same ID and value hash
