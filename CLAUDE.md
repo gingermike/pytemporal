@@ -74,6 +74,9 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 ## Gitea CI/CD
 - **Workflow**: `.gitea/workflows/build-wheels.yml` - Complete Linux wheel building and publishing
 - **Architectures**: x86_64 and aarch64 cross-compilation support
+- **Manylinux Targets**:
+  - `manylinux_2_34` - Modern Linux (glibc 2.34+, Ubuntu 22.04+, Debian 12+)
+  - `manylinux_2_31` - Legacy Linux (glibc 2.31+, Ubuntu 20.04, Debian 11) - Uses PyO3/maturin-action with official Docker containers
 - **Publishing**: Automatic publishing to Gitea package registry on version tags
 - **Setup Guide**: `docs/gitea-publishing.md` - Complete configuration instructions
 - **Triggers**: Version tags (`v1.0.0`) and manual workflow dispatch
@@ -109,6 +112,7 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - **2025-11-25**: Fixed backfill bug where tombstones (bounded records) were incorrectly merged with open-ended updates. Added `is_open_ended()` and `should_prevent_merge()` functions to detect and prevent merging bounded tombstones with open-ended updates. Added filtering for records where `effective_from > system_date` during tombstoning. Comprehensive test coverage: 3 Python + 4 Rust tests for backfill scenarios.
 - **2025-11-25**: Fixed full_state mode exact match search bug. Previously, when multiple current records had the same hash but different effective dates, the algorithm stopped at the first matching hash without checking for exact temporal matches. Now correctly searches all matching records with priority: exact match > adjacent > any match. Prevents unnecessary inserts when records already exist with same values.
 - **2025-11-25**: Fixed critical deduplication bug where records with same hash but DIFFERENT ID columns were incorrectly deduplicated. The `deduplicate_record_batches` function now includes ID columns in the deduplication key: `(id_key, effective_from, effective_to, value_hash)`. This fixes transitive closure calculations and similar workflows where multiple distinct records can have identical value hashes. All 39 Python + 39 Rust tests pass.
+- **2025-11-26**: Added manylinux_2_31 wheel builds for users with older glibc (2.31). New `build-linux-wheels-legacy` job in CI uses PyO3/maturin-action with official manylinux Docker containers. Both modern (manylinux_2_34) and legacy (manylinux_2_31) wheels are published; pip auto-selects the appropriate wheel.
 
 ## RESOLVED: Full State Mode Tombstone Records ✅
 
