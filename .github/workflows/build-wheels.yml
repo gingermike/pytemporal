@@ -112,9 +112,14 @@ jobs:
   build-linux-wheels-legacy:
     needs: test
     runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_31_x86_64
     strategy:
       matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python:
+          - { version: '3.9', abi: 'cp39-cp39' }
+          - { version: '3.10', abi: 'cp310-cp310' }
+          - { version: '3.11', abi: 'cp311-cp311' }
+          - { version: '3.12', abi: 'cp312-cp312' }
 
     steps:
     - uses: actions/checkout@v4
@@ -139,13 +144,21 @@ jobs:
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
 
-    - name: Build wheel in manylinux_2_31 container
-      uses: PyO3/maturin-action@v1
-      with:
-        target: x86_64
-        manylinux: '2_31'
-        container: auto
-        args: --release --out dist --interpreter python${{ matrix.python-version }}
+    - name: Install Rust
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source $HOME/.cargo/env
+        rustup default stable
+
+    - name: Install maturin
+      run: |
+        source $HOME/.cargo/env
+        /opt/python/${{ matrix.python.abi }}/bin/pip install maturin
+
+    - name: Build wheel
+      run: |
+        source $HOME/.cargo/env
+        /opt/python/${{ matrix.python.abi }}/bin/maturin build --release --out dist --interpreter /opt/python/${{ matrix.python.abi }}/bin/python
 
     - name: List built wheels
       run: ls -la dist/
@@ -153,7 +166,7 @@ jobs:
     - name: Upload wheel as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: wheels-linux-manylinux2_31-py${{ matrix.python-version }}
+        name: wheels-linux-manylinux2_31-py${{ matrix.python.version }}
         path: dist/*.whl
 
   publish-release:
