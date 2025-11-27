@@ -42,9 +42,10 @@ jobs:
       matrix:
         target: [x86_64]
         python-version: ['3.9', '3.10', '3.11', '3.12']
+        manylinux: ['manylinux_2_34']  # Default modern target
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Extract version from tag
       id: version
       run: |
@@ -56,25 +57,25 @@ jobs:
           echo "VERSION=0.1.0-dev" >> $GITHUB_OUTPUT
           echo "Building development version"
         fi
-        
+
     - name: Update version in files
       if: startsWith(github.ref, 'refs/tags/v')
       run: |
         VERSION=${{ steps.version.outputs.VERSION }}
         echo "Updating version to: $VERSION"
-        
+
         # Update Cargo.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-        
+
         # Update pyproject.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-        
+
         # Verify changes
         echo "Updated Cargo.toml:"
         grep "^version" Cargo.toml
         echo "Updated pyproject.toml:"
         grep "^version" pyproject.toml
-        
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
@@ -95,7 +96,7 @@ jobs:
         PYTHON_PATH=$(which python3)
         echo "Using Python interpreter: $PYTHON_PATH (${{ matrix.python-version }})"
         python3 --version
-        
+
         # Build wheel for this specific Python version
         uv run maturin build --release --out dist --interpreter $PYTHON_PATH
     - name: List built wheels
@@ -106,22 +107,70 @@ jobs:
         name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
 
+  # Build wheels for older glibc systems (manylinux_2_31 = glibc 2.31+)
+  # Uses official manylinux Docker containers for proper compatibility
+  build-linux-wheels-legacy:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Extract version from tag
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+        else
+          echo "VERSION=0.1.0-dev" >> $GITHUB_OUTPUT
+          echo "Building development version"
+        fi
+
+    - name: Update version in files
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        VERSION=${{ steps.version.outputs.VERSION }}
+        echo "Updating version to: $VERSION"
+        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+
+    - name: Build wheel in manylinux_2_31 container
+      uses: PyO3/maturin-action@v1
+      with:
+        target: x86_64
+        manylinux: '2_31'
+        args: --release --out dist --interpreter python${{ matrix.python-version }}
+
+    - name: List built wheels
+      run: ls -la dist/
+
+    - name: Upload wheel as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-linux-manylinux2_31-py${{ matrix.python-version }}
+        path: dist/*.whl
+
   publish-release:
-    needs: [build-linux-wheels, benchmarks]
+    needs: [build-linux-wheels, build-linux-wheels-legacy, benchmarks]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Extract version from tag
       id: version
       run: |
         VERSION=${GITHUB_REF#refs/tags/v}
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "FULL_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-    
+
     - name: Download all wheel artifacts
       uses: actions/download-artifact@v4
       with:
@@ -169,6 +218,10 @@ jobs:
 
           ## Linux Wheels Built
           - x86_64 (Intel/AMD 64-bit) for Python 3.9, 3.10, 3.11, 3.12
+          - **manylinux_2_34** - Modern Linux (glibc 2.34+, Ubuntu 22.04+, Debian 12+)
+          - **manylinux_2_31** - Legacy Linux (glibc 2.31+, Ubuntu 20.04, Debian 11)
+
+          pip will automatically select the appropriate wheel for your system's glibc version.
 
           ## Features
           - High-performance bitemporal timeseries processing  
@@ -460,7 +513,7 @@ jobs:
       id: deployment
 
   publish-pypi:
-    needs: build-linux-wheels  # or 'needs: publish-release' if you want PyPI only after GitHub release
+    needs: [build-linux-wheels, build-linux-wheels-legacy]
     runs-on: ubuntu-latest
     environment:
       name: pypi
