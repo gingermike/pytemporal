@@ -59,7 +59,6 @@ jobs:
       matrix:
         target: [x86_64]
         python-version: ['3.9', '3.10', '3.11', '3.12']
-        manylinux: ['manylinux_2_34']  # Default modern target
 
     steps:
     - uses: actions/checkout@v4
@@ -132,56 +131,8 @@ jobs:
         name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
 
-  # Build wheels for older glibc systems (manylinux_2_31 = glibc 2.31+)
-  # Uses official manylinux Docker containers for proper compatibility
-  build-linux-wheels-legacy:
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Extract version from tag
-      id: version
-      run: |
-        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
-        else
-          echo "VERSION=0.1.0-dev" >> $GITHUB_OUTPUT
-          echo "Building development version"
-        fi
-
-    - name: Update version in files
-      if: startsWith(github.ref, 'refs/tags/v')
-      run: |
-        VERSION=${{ steps.version.outputs.VERSION }}
-        echo "Updating version to: $VERSION"
-        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-
-    - name: Build wheel in manylinux_2_31 container
-      uses: PyO3/maturin-action@v1
-      with:
-        target: x86_64
-        manylinux: '2_31'
-        args: --release --out dist --interpreter python${{ matrix.python-version }}
-
-    - name: List built wheels
-      run: ls -la dist/
-
-    - name: Upload wheel as artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: wheels-linux-manylinux2_31-py${{ matrix.python-version }}
-        path: dist/*.whl
-        
   publish-to-gitea:
-    needs: [build-linux-wheels, build-linux-wheels-legacy]
+    needs: build-linux-wheels
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')  # Only publish on version tags
     
@@ -234,16 +185,12 @@ jobs:
 
         ## Linux Wheels Built
         - x86_64 (Intel/AMD 64-bit) for Python 3.9, 3.10, 3.11, 3.12
-        - **manylinux_2_34** - Modern Linux (glibc 2.34+, Ubuntu 22.04+, Debian 12+)
-        - **manylinux_2_31** - Legacy Linux (glibc 2.31+, Ubuntu 20.04, Debian 11)
 
         ## Installation
         \`\`\`bash
         # Install from Gitea package registry
         pip install --index-url ${{ secrets.GITEA_PACKAGE_URL }}/simple/ pytemporal==${{ steps.version.outputs.VERSION }}
         \`\`\`
-
-        pip will automatically select the appropriate wheel for your system's glibc version.
 
         ## Features
         - High-performance bitemporal timeseries processing
