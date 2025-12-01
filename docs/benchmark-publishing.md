@@ -66,12 +66,13 @@ This modifies the HTML reports to include:
 
 ### 4. GitHub Actions Workflow
 
-The `.github/workflows/benchmarks.yml` workflow:
+The benchmarks are part of `.github/workflows/build-wheels.yml` and run on version tags:
 
-1. **Runs benchmarks** with flamegraph generation for key tests
-2. **Post-processes HTML** to add flamegraph links
-3. **Creates landing page** with benchmark overview
-4. **Publishes to GitHub Pages** automatically
+1. **Runs Rust benchmarks** with flamegraph generation for key tests
+2. **Runs Python benchmarks** via pytest-benchmark
+3. **Post-processes HTML** to add flamegraph links and PyTemporal branding
+4. **Tracks historical trends** via github-action-benchmark
+5. **Publishes to GitHub Pages** with criterion reports
 
 ### 5. Python Benchmarks (pytest-benchmark)
 
@@ -157,16 +158,18 @@ python3 -m http.server 8000 --directory pages
 ### Workflow Triggers
 
 The benchmark workflow runs on:
-- Push to `main`/`master` branch
-- Pull requests to `main`/`master` branch  
+- **Version tags** (`v*`) - Full benchmarks with historical tracking
 - Manual workflow dispatch
+
+Benchmarks only run on tag releases to maintain clean historical trend data.
 
 ### Expected Output
 
 After successful deployment, GitHub Pages will host:
 
-- **Landing page** at `https://<username>.github.io/<repo>/` 
-- **Individual benchmark reports** with integrated flamegraph links
+- **Landing page** at `https://<username>.github.io/<repo>/bench/`
+- **Historical trends** tracked in `bench/data.js`
+- **Criterion reports** at `bench/criterion/` with integrated flamegraph links
 - **Flamegraph SVG files** directly accessible
 
 ## Performance Expectations
@@ -232,9 +235,9 @@ Flamegraphs help identify:
 Potential improvements:
 
 1. **Interactive flamegraphs** with zoom/search capabilities
-2. **Historical comparison** across commits  
-3. **Performance regression detection** with alerts
-4. **Custom styling** for better visual integration
+2. ~~**Historical comparison** across commits~~ ✅ Implemented via github-action-benchmark
+3. ~~**Performance regression detection** with alerts~~ ✅ Implemented (150% threshold)
+4. ~~**Custom styling** for better visual integration~~ ✅ Implemented (PyTemporal branding)
 5. **Multiple profiling tools** (perf, valgrind, etc.)
 
 This automated benchmark publishing system provides comprehensive performance visibility for the bitemporal timeseries algorithm with minimal maintenance overhead.

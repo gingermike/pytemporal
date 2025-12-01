@@ -191,9 +191,11 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Extract version from tag
       id: version
       run: |
@@ -201,91 +203,78 @@ jobs:
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
         echo "FULL_TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
         echo "Building benchmarks for version: $VERSION"
-        
+
     - name: Update version in files
       run: |
         VERSION=${{ steps.version.outputs.VERSION }}
-        echo "Updating version to: $VERSION"
-        
-        # Update Cargo.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-        
-        # Update pyproject.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-        
-        # Verify changes
-        echo "Updated Cargo.toml:"
-        grep "^version" Cargo.toml
-        echo "Updated pyproject.toml:"
-        grep "^version" pyproject.toml
-        
+
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
-        
+        python-version: '3.11'
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: stable
-        
+
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
-      
+
     - name: Install Python dependencies
+      run: uv sync --group dev
+
+    - name: Build Python module
+      run: uv run maturin develop --release
+
+    - name: Run Rust benchmarks with flamegraphs
       run: |
-        python3 -m pip install --upgrade pip
-        
-    - name: Build project
-      run: cargo build --release
-      
-    - name: Run benchmarks and generate flamegraphs
-      run: |
-        echo "🔥 Running core benchmarks with flamegraph generation..."
-        
-        # Generate flamegraphs for key performance analysis benchmarks
+        echo "🦀 Running Rust benchmarks..."
+
+        # Generate flamegraphs for key benchmarks
         cargo bench --bench bitemporal_benchmarks medium_dataset -- --profile-time 3
         cargo bench --bench bitemporal_benchmarks conflation_effectiveness -- --profile-time 3
-        
-        # Large dataset benchmark with shorter profiling to avoid timeout
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000" -- --profile-time 2
-        
-        
-        # Run smaller benchmarks without flamegraphs for speed
+
+        # Run remaining benchmarks
         cargo bench --bench bitemporal_benchmarks small_dataset
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/10"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/50"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/100"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500"
-        
-        # Run all parallel effectiveness scenarios
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/few_ids_many_records"
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/many_ids_few_records"
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/balanced_workload"
-        
-        echo "✅ All benchmarks completed"
-        
+
+        echo "✅ Rust benchmarks completed"
+
+    - name: Generate Rust bencher output for tracking
+      run: |
+        cargo bench --bench bitemporal_benchmarks -- --noplot --output-format bencher | tee rust_bench_output.txt
+
+    - name: Run Python benchmarks
+      run: |
+        echo "🐍 Running Python benchmarks..."
+        uv run pytest benches/test_python_benchmarks.py \
+          --benchmark-only \
+          --benchmark-json=python_bench_output.json \
+          --benchmark-sort=name \
+          --benchmark-min-rounds=3 \
+          -v
+        echo "✅ Python benchmarks completed"
+
     - name: Add flamegraph links to HTML reports
-      run: |
-        echo "🔗 Adding flamegraph links to HTML reports..."
-        python3 scripts/add_flamegraphs_to_html.py
-        echo "✅ HTML reports updated with flamegraph links"
-        
+      run: python3 scripts/add_flamegraphs_to_html.py
+
     - name: Add PyTemporal branding to HTML reports
-      run: |
-        echo "🎨 Adding PyTemporal branding to HTML reports..."
-        python3 scripts/add_pytemporal_branding.py
-        echo "✅ HTML reports updated with PyTemporal branding"
+      run: python3 scripts/add_pytemporal_branding.py
 
     - name: Create benchmark ZIP artifact
       run: |
-        echo "📦 Creating benchmark ZIP archive..."
         mkdir -p benchmark-artifacts
+        cp python_bench_output.json target/criterion/
         cd target/criterion
         zip -r ../../benchmark-artifacts/benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip .
-        cd ../..
-        ls -la benchmark-artifacts/
-        echo "✅ Benchmark ZIP created"
 
     - name: Upload benchmark ZIP artifact
       uses: actions/upload-artifact@v4
@@ -293,174 +282,125 @@ jobs:
         name: benchmarks-${{ steps.version.outputs.FULL_TAG }}
         path: benchmark-artifacts/*.zip
 
-    - name: Prepare GitHub Pages content
+    - name: Push Rust benchmark trends to gh-pages
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Rust Benchmarks
+        tool: 'cargo'
+        output-file-path: rust_bench_output.txt
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        benchmark-data-dir-path: 'bench'
+        max-items-in-chart: 50
+
+    - name: Push Python benchmark trends to gh-pages
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: Python Benchmarks
+        tool: 'pytest'
+        output-file-path: python_bench_output.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: true
+        benchmark-data-dir-path: 'bench'
+        max-items-in-chart: 50
+
+    - name: Deploy criterion reports to gh-pages
       run: |
-        echo "📦 Preparing GitHub Pages content..."
-        
-        # Copy criterion reports to a pages directory
-        mkdir -p site
-        cp -r target/criterion/* site/
-        
-        # Copy PyTemporal logo to site
-        cp docs/logo.svg site/
-        
-        # Create a landing page with version information
-        cat > site/index.html << EOF
+        # Save criterion reports before switching branches
+        mkdir -p /tmp/criterion-reports
+        cp -r target/criterion/* /tmp/criterion-reports/
+        cp docs/logo.svg /tmp/criterion-reports/ 2>/dev/null || true
+
+        git fetch origin gh-pages
+        git checkout gh-pages
+
+        # Copy criterion reports from temp
+        mkdir -p bench/criterion
+        cp -r /tmp/criterion-reports/* bench/criterion/
+        cp /tmp/criterion-reports/logo.svg bench/ 2>/dev/null || true
+
+        # Create landing page
+        cat > bench/index.html << 'HTMLEOF'
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Bitemporal Timeseries v${{ steps.version.outputs.VERSION }} - Performance Benchmarks</title>
+            <title>PyTemporal Benchmarks</title>
             <meta charset="utf-8">
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; line-height: 1.6; color: #1f2937; }
                 .container { max-width: 1200px; margin: 0 auto; }
-                h1 { color: #1f2937; font-weight: 300; }
-                h2 { color: #1f2937; margin-top: 30px; }
-                .benchmark-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
-                .benchmark-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; background: #f9fafb; }
-                .benchmark-card h3 { margin-top: 0; color: #3b82f6; }
-                .benchmark-links { margin: 10px 0; }
-                .benchmark-links a { display: inline-block; margin: 5px 10px 5px 0; padding: 8px 12px; background: #3b82f6; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
-                .benchmark-links a:hover { background: #1d4ed8; }
-                .flamegraph-link { background: linear-gradient(135deg, #f59e0b, #d97706) !important; }
-                .flamegraph-link:hover { background: linear-gradient(135deg, #d97706, #b45309) !important; }
-                .summary { background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0; }
-                .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #d1d5db; text-align: center; color: #6b7280; }
-                .download-section { background: linear-gradient(135deg, #ecfdf5, #d1fae5); padding: 15px; border-radius: 8px; margin: 20px 0; }
+                h1, h2 { color: #1f2937; }
+                .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin: 20px 0; }
+                .card h3 { margin-top: 0; color: #3b82f6; }
+                a { color: #3b82f6; }
+                .btn { display: inline-block; padding: 8px 16px; background: #3b82f6; color: white; text-decoration: none; border-radius: 4px; margin: 5px 5px 5px 0; }
+                .btn:hover { background: #1d4ed8; }
+                .btn-orange { background: linear-gradient(135deg, #f59e0b, #d97706); }
+                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
             </style>
         </head>
         <body>
             <div class="container">
-                <div style="display: flex; align-items: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 3px solid #3b82f6;">
-                    <img src="logo.svg" alt="PyTemporal Logo" style="margin-right: 20px;" width="280" height="80">
+                <div style="display: flex; align-items: center; margin-bottom: 30px; border-bottom: 3px solid #3b82f6; padding-bottom: 20px;">
+                    <img src="logo.svg" alt="PyTemporal" width="280" height="80" style="margin-right: 20px;">
                     <div>
-                        <h1 style="margin: 0; color: #1f2937; font-weight: 300;">Performance Benchmarks</h1>
-                        <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 18px;">High-Performance Bitemporal Processing • Version ${{ steps.version.outputs.VERSION }}</p>
+                        <h1 style="margin: 0;">Performance Benchmarks</h1>
+                        <p style="margin: 5px 0 0 0; color: #6b7280;">High-Performance Bitemporal Processing</p>
                     </div>
                 </div>
-                
-                <div class="summary">
-                    <h2>📊 Performance Summary</h2>
-                    <p><strong>Release:</strong> ${{ steps.version.outputs.FULL_TAG }} | <strong>Generated:</strong> $(date -u '+%Y-%m-%d %H:%M UTC')</p>
-                    <p>This page contains comprehensive performance benchmarks for the pytemporal bitemporal timeseries processing algorithm, including flamegraphs for detailed performance analysis.</p>
+
+                <div class="card">
+                    <h2>📈 Historical Trends</h2>
+                    <p>Performance tracked across releases:</p>
                     <ul>
-                        <li><strong>Small Dataset (5 records)</strong>: ~30-35 µs</li>
-                        <li><strong>Medium Dataset (100 records)</strong>: ~165-170 µs</li> 
-                        <li><strong>Large Dataset (500k records)</strong>: ~900-950 ms</li>
-                        <li><strong>Conflation Effectiveness</strong>: ~28 µs</li>
+                        <li><strong>Rust Benchmarks</strong> - Core algorithm performance</li>
+                        <li><strong>Python Benchmarks</strong> - Python API performance</li>
                     </ul>
+                    <p>Data: <a href="data.js">bench/data.js</a></p>
                 </div>
 
-                <div class="download-section">
-                    <h2>📥 Download Complete Benchmark Data</h2>
-                    <p>Download the complete benchmark results including all raw data, HTML reports, and flamegraphs:</p>
-                    <a href="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.FULL_TAG }}/benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip" style="display: inline-block; padding: 10px 20px; background: #27ae60; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">
-                        📦 Download benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip
-                    </a>
-                </div>
-
-                <h2>🎯 Core Benchmarks</h2>
-                <div class="benchmark-grid">
-                    <div class="benchmark-card">
-                        <h3>Small Dataset</h3>
-                        <p>Basic functionality test with 5 records</p>
-                        <div class="benchmark-links">
-                            <a href="small_dataset/report/">📈 Report</a>
-                        </div>
+                <h2>🦀 Rust Criterion Reports</h2>
+                <div class="grid">
+                    <div class="card">
+                        <h3>Core Benchmarks</h3>
+                        <a class="btn" href="criterion/small_dataset/report/">Small Dataset</a>
+                        <a class="btn" href="criterion/medium_dataset/report/">Medium Dataset</a>
+                        <a class="btn btn-orange" href="criterion/medium_dataset/profile/flamegraph.svg">🔥 Flamegraph</a>
                     </div>
-                    
-                    <div class="benchmark-card">
-                        <h3>Medium Dataset</h3>
-                        <p>Medium-scale test with 100 current records and 20 updates</p>
-                        <div class="benchmark-links">
-                            <a href="medium_dataset/report/">📈 Report</a>
-                            <a href="medium_dataset/profile/flamegraph.svg" class="flamegraph-link">🔥 Flamegraph</a>
-                        </div>
+                    <div class="card">
+                        <h3>Scaling Analysis</h3>
+                        <a class="btn" href="criterion/scaling_by_dataset_size/report/">Overview</a>
+                        <a class="btn" href="criterion/scaling_by_dataset_size/records/500000/report/">500k Records</a>
+                        <a class="btn btn-orange" href="criterion/scaling_by_dataset_size/records/500000/profile/flamegraph.svg">🔥 Flamegraph</a>
                     </div>
-                    
-                    <div class="benchmark-card">
-                        <h3>Conflation Effectiveness</h3>
-                        <p>Tests the effectiveness of adjacent segment merging</p>
-                        <div class="benchmark-links">
-                            <a href="conflation_effectiveness/report/">📈 Report</a>
-                            <a href="conflation_effectiveness/profile/flamegraph.svg" class="flamegraph-link">🔥 Flamegraph</a>
-                        </div>
-                    </div>
-                </div>
-
-                <h2>📏 Scaling Analysis</h2>
-                <div class="benchmark-grid">
-                    <div class="benchmark-card">
-                        <h3>Dataset Size Scaling</h3>
-                        <p>Performance analysis across different dataset sizes</p>
-                        <div class="benchmark-links">
-                            <a href="scaling_by_dataset_size/report/">📈 Overview</a>
-                            <a href="scaling_by_dataset_size/records/10/report/">10 records</a>
-                            <a href="scaling_by_dataset_size/records/50/report/">50 records</a>
-                            <a href="scaling_by_dataset_size/records/100/report/">100 records</a>
-                            <a href="scaling_by_dataset_size/records/500/report/">500 records</a>
-                            <a href="scaling_by_dataset_size/records/500000/report/">500k records</a>
-                        </div>
-                        <div class="benchmark-links">
-                            <a href="scaling_by_dataset_size/records/500000/profile/flamegraph.svg" class="flamegraph-link">🔥 Large Dataset Flamegraph</a>
-                        </div>
-                    </div>
-                    
-                    <div class="benchmark-card">
+                    <div class="card">
                         <h3>Parallel Effectiveness</h3>
-                        <p>Analysis of parallelization effectiveness across different workload patterns</p>
-                        <div class="benchmark-links">
-                            <a href="parallel_effectiveness/report/">📈 Overview</a>
-                            <a href="parallel_effectiveness/scenario/few_ids_many_records/report/">Few IDs, Many Records</a>
-                            <a href="parallel_effectiveness/scenario/many_ids_few_records/report/">Many IDs, Few Records</a>
-                            <a href="parallel_effectiveness/scenario/balanced_workload/report/">Balanced Workload</a>
-                        </div>
+                        <a class="btn" href="criterion/parallel_effectiveness/report/">Overview</a>
+                        <a class="btn" href="criterion/conflation_effectiveness/report/">Conflation</a>
                     </div>
                 </div>
 
-                <h2>🔥 Understanding Flamegraphs</h2>
-                <div class="summary">
-                    <p><strong>Flamegraphs</strong> show exactly where your code spends time:</p>
-                    <ul>
-                        <li><strong>Width</strong>: How much time is spent in each function</li>
-                        <li><strong>Height</strong>: Call stack depth</li>
-                        <li><strong>Colors</strong>: Different functions/modules</li>
-                        <li><strong>Click</strong>: Zoom into specific functions</li>
-                    </ul>
-                    <p>Look for wide bars to identify performance hotspots in the bitemporal algorithm.</p>
+                <div class="card">
+                    <h3>🐍 Python Benchmarks</h3>
+                    <p>Python API benchmarks mirror Rust scenarios. Results in <a href="criterion/python_bench_output.json">JSON format</a>.</p>
                 </div>
 
-                <div class="footer">
-                    <p>Generated by <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a> with flamegraph integration via <a href="https://github.com/tikv/pprof-rs">pprof-rs</a></p>
-                    <p><strong>Version:</strong> ${{ steps.version.outputs.FULL_TAG }} | <strong>Generated:</strong> $(date -u '+%Y-%m-%d %H:%M UTC')</p>
-                    <p>View other releases: <a href="https://github.com/${{ github.repository }}/releases">Release History</a></p>
-                </div>
+                <p style="margin-top: 40px; color: #6b7280; text-align: center;">
+                    Generated by <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a> and <a href="https://github.com/benchmark-action/github-action-benchmark">github-action-benchmark</a>
+                </p>
             </div>
         </body>
         </html>
-        EOF
-        
-        echo "✅ GitHub Pages content prepared"
-        
-    - name: Upload pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: site
+        HTMLEOF
 
-  deploy-benchmarks:
-    needs: benchmarks
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-    - name: Deploy to GitHub Pages
-      uses: actions/deploy-pages@v4   # upgraded to v4
-      id: deployment
+        git config user.name "GitHub Actions"
+        git config user.email "actions@github.com"
+        git add bench/
+        git commit -m "Update benchmarks for ${{ steps.version.outputs.FULL_TAG }}" || echo "No changes"
+        git push origin gh-pages
+
+        # Return to original branch for subsequent jobs
+        git checkout -
 
   publish-pypi:
     needs: build-linux-wheels
