@@ -4,8 +4,8 @@ This document explains how the project automatically generates and publishes per
 
 ## Live Benchmark URLs
 
-- **📈 Dashboard**: https://gingermike.github.io/pytemporal/bench/
-- **📊 Criterion Reports**: https://gingermike.github.io/pytemporal/bench/criterion/report/
+- **📈 Dashboard**: https://gingermike.github.io/pytemporal/
+- **📊 Criterion Reports**: https://gingermike.github.io/pytemporal/criterion/report/
 
 ## Overview
 
@@ -167,9 +167,9 @@ Benchmarks only run on tag releases to maintain clean historical trend data.
 
 After successful deployment, GitHub Pages will host:
 
-- **Landing page** at `https://<username>.github.io/<repo>/bench/`
-- **Historical trends** tracked in `bench/data.js`
-- **Criterion reports** at `bench/criterion/` with integrated flamegraph links
+- **Landing page** at `https://<username>.github.io/<repo>/`
+- **Historical trends** tracked in `data.js`
+- **Criterion reports** at `criterion/` with integrated flamegraph links
 - **Flamegraph SVG files** directly accessible
 
 ## Performance Expectations

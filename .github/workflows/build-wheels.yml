@@ -177,8 +177,8 @@ jobs:
           - Adaptive parallelisation for large datasets
           
           ## Performance Benchmarks
-          - 📈 [Benchmark Dashboard](https://gingermike.github.io/pytemporal/bench/) - Historical trends
-          - 📊 [Criterion Reports](https://gingermike.github.io/pytemporal/bench/criterion/report/) - Detailed analysis
+          - 📈 [Benchmark Dashboard](https://gingermike.github.io/pytemporal/) - Historical trends
+          - 📊 [Criterion Reports](https://gingermike.github.io/pytemporal/criterion/report/) - Detailed analysis
 
           Typical performance (v${{ steps.version.outputs.VERSION }}):
           - Small Dataset (5 records): ~30-35 µs
@@ -297,7 +297,7 @@ jobs:
         output-file-path: rust_bench_output.txt
         github-token: ${{ secrets.GITHUB_TOKEN }}
         auto-push: true
-        benchmark-data-dir-path: 'bench'
+        benchmark-data-dir-path: '.'
         max-items-in-chart: 50
 
     - name: Push Python benchmark trends to gh-pages
@@ -308,7 +308,7 @@ jobs:
         output-file-path: python_bench_output.json
         github-token: ${{ secrets.GITHUB_TOKEN }}
         auto-push: true
-        benchmark-data-dir-path: 'bench'
+        benchmark-data-dir-path: '.'
         max-items-in-chart: 50
 
     - name: Deploy criterion reports to gh-pages
@@ -321,13 +321,13 @@ jobs:
         git fetch origin gh-pages
         git checkout gh-pages
 
-        # Copy criterion reports from temp
-        mkdir -p bench/criterion
-        cp -r /tmp/criterion-reports/* bench/criterion/
-        cp /tmp/criterion-reports/logo.svg bench/ 2>/dev/null || true
+        # Copy criterion reports to root
+        mkdir -p criterion
+        cp -r /tmp/criterion-reports/* criterion/
+        cp /tmp/criterion-reports/logo.svg ./ 2>/dev/null || true
 
         # Create landing page with Chart.js for historical trends
-        cat > bench/index.html << 'HTMLEOF'
+        cat > index.html << 'HTMLEOF'
         <!DOCTYPE html>
         <html>
         <head>
@@ -374,7 +374,7 @@ jobs:
                     <div class="chart-container">
                         <canvas id="benchChart"></canvas>
                     </div>
-                    <p style="font-size: 0.9em; color: #6b7280;">Data: <a href="data.js">bench/data.js</a></p>
+                    <p style="font-size: 0.9em; color: #6b7280;">Data: <a href="data.js">data.js</a></p>
                 </div>
 
                 <h2>🦀 Rust Criterion Reports</h2>
@@ -498,7 +498,7 @@ jobs:
 
         git config user.name "GitHub Actions"
         git config user.email "actions@github.com"
-        git add bench/
+        git add criterion/ index.html logo.svg data.js 2>/dev/null || git add criterion/ index.html data.js
         git commit -m "Update benchmarks for ${{ steps.version.outputs.FULL_TAG }}" || echo "No changes"
         git push origin gh-pages
 
