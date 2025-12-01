@@ -51,21 +51,26 @@
         <div class="grid">
             <div class="card">
                 <h3>Core Benchmarks</h3>
-                <a class="btn" href="criterion/small_dataset/report/">Small Dataset</a>
-                <a class="btn" href="criterion/medium_dataset/report/">Medium Dataset</a>
-                <a class="btn btn-orange" href="criterion/medium_dataset/profile/flamegraph.svg">🔥 Flamegraph</a>
-            </div>
-            <div class="card">
-                <h3>Scaling Analysis</h3>
-                <a class="btn" href="criterion/scaling_by_dataset_size/report/">Overview</a>
-                <a class="btn" href="criterion/scaling_by_dataset_size/records/500000/report/">500k Records</a>
-                <a class="btn btn-orange" href="criterion/scaling_by_dataset_size/records/500000/profile/flamegraph.svg">🔥 Flamegraph</a>
-            </div>
-            <div class="card">
-                <h3>Parallel & Conflation</h3>
-                <a class="btn" href="criterion/parallel_effectiveness/report/">Parallel Overview</a>
+                <a class="btn" href="criterion/small_dataset/report/">Small (5 records)</a>
+                <a class="btn" href="criterion/medium_dataset/report/">Medium (100 records)</a>
+                <a class="btn btn-orange" href="criterion/medium_dataset/profile/flamegraph.svg">🔥</a>
                 <a class="btn" href="criterion/conflation_effectiveness/report/">Conflation</a>
-                <a class="btn btn-orange" href="criterion/conflation_effectiveness/profile/flamegraph.svg">🔥 Flamegraph</a>
+                <a class="btn btn-orange" href="criterion/conflation_effectiveness/profile/flamegraph.svg">🔥</a>
+            </div>
+            <div class="card">
+                <h3>Scaling by Dataset Size</h3>
+                <a class="btn" href="criterion/scaling_by_dataset_size/records/10/report/">10</a>
+                <a class="btn" href="criterion/scaling_by_dataset_size/records/50/report/">50</a>
+                <a class="btn" href="criterion/scaling_by_dataset_size/records/100/report/">100</a>
+                <a class="btn" href="criterion/scaling_by_dataset_size/records/500/report/">500</a>
+                <a class="btn" href="criterion/scaling_by_dataset_size/records/500000/report/">500k</a>
+                <a class="btn btn-orange" href="criterion/scaling_by_dataset_size/records/500000/profile/flamegraph.svg">🔥</a>
+            </div>
+            <div class="card">
+                <h3>Parallel Effectiveness</h3>
+                <a class="btn" href="criterion/parallel_effectiveness/scenario/few_ids_many_records/report/">Few IDs, Many Records</a>
+                <a class="btn" href="criterion/parallel_effectiveness/scenario/many_ids_few_records/report/">Many IDs, Few Records</a>
+                <a class="btn" href="criterion/parallel_effectiveness/scenario/balanced_workload/report/">Balanced</a>
             </div>
         </div>
 
@@ -86,7 +91,7 @@
     const colors = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
     function initChart() {
-        if (!window.BENCHMARK_DATA) {
+        if (!window.BENCHMARK_DATA || !window.BENCHMARK_DATA.entries) {
             document.getElementById('benchChart').parentElement.innerHTML = '<p style="color:#6b7280;text-align:center;padding:40px;">No benchmark data available yet. Data will appear after the first tagged release.</p>';
             return;
         }
@@ -96,9 +101,10 @@
 
     function populateSelect() {
         const select = document.getElementById('benchmarkSelect');
-        const entries = window.BENCHMARK_DATA.entries;
+        const targetName = currentType === 'rust' ? 'Rust Benchmarks' : 'Python Benchmarks';
+        const runs = window.BENCHMARK_DATA.entries[targetName] || [];
         const benchNames = new Set();
-        Object.values(entries).forEach(e => e.benches.forEach(b => benchNames.add(b.name)));
+        runs.forEach(run => run.benches.forEach(b => benchNames.add(b.name)));
         select.innerHTML = '<option value="all">All Benchmarks</option>';
         [...benchNames].sort().forEach(name => {
             const opt = document.createElement('option');
@@ -121,19 +127,21 @@
     }
 
     function renderChart() {
-        const entries = window.BENCHMARK_DATA.entries;
         const targetName = currentType === 'rust' ? 'Rust Benchmarks' : 'Python Benchmarks';
-        const data = entries[targetName];
-        if (!data || !data.benches.length) {
+        const runs = window.BENCHMARK_DATA.entries[targetName] || [];
+        if (!runs.length) {
             document.getElementById('benchChart').parentElement.innerHTML = '<p style="color:#6b7280;text-align:center;padding:40px;">No ' + targetName.toLowerCase() + ' data available.</p>';
             return;
         }
         const selected = document.getElementById('benchmarkSelect').value;
         const benchmarks = {};
-        data.benches.forEach(b => {
-            if (selected !== 'all' && b.name !== selected) return;
-            if (!benchmarks[b.name]) benchmarks[b.name] = [];
-            benchmarks[b.name].push({ commit: b.commit.id.slice(0,7), value: b.value, unit: b.unit });
+        runs.forEach(run => {
+            const commitId = run.commit.id.slice(0,7);
+            run.benches.forEach(b => {
+                if (selected !== 'all' && b.name !== selected) return;
+                if (!benchmarks[b.name]) benchmarks[b.name] = [];
+                benchmarks[b.name].push({ commit: commitId, value: b.value, unit: b.unit });
+            });
         });
         const labels = benchmarks[Object.keys(benchmarks)[0]]?.map(d => d.commit) || [];
         const datasets = Object.entries(benchmarks).map(([name, points], i) => ({
