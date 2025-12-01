@@ -79,8 +79,10 @@ class BitemporalTimeseriesProcessor:
         current_state, updates = self._normalize_schemas(current_state, updates)
         
         # Convert pandas DataFrames to Arrow RecordBatches
-        current_batch = pa.RecordBatch.from_pandas(current_state)
-        updates_batch = pa.RecordBatch.from_pandas(updates)
+        # CRITICAL: preserve_index=False prevents pandas index from leaking into Arrow schema
+        # Without this, some batches get __index_level_0__ column which breaks Rust consolidation
+        current_batch = pa.RecordBatch.from_pandas(current_state, preserve_index=False)
+        updates_batch = pa.RecordBatch.from_pandas(updates, preserve_index=False)
         
         # Convert timestamp columns from nanoseconds to microseconds for Rust compatibility
         current_batch = self._convert_timestamps_to_microseconds(current_batch)
@@ -102,69 +104,52 @@ class BitemporalTimeseriesProcessor:
         )
         
         # Use expired records from Rust (with updated as_of_to timestamps)
+        # Convert using zero-copy Arrow PyCapsule interface for optimal performance
         if expired_batch:
-            expired_dfs = []
-            for batch in expired_batch:
-                # arro3 doesn't have to_pandas(), use manual conversion
-                data = {}
-                col_names = batch.column_names
-                
-                for i in range(batch.num_columns):
-                    col_name = col_names[i]
-                    column = batch.column(i)
-                    col_data = column.to_pylist()
-                    data[col_name] = col_data
-                
-                expired_dfs.append(pd.DataFrame(data))
-            
-            rows_to_expire = pd.concat(expired_dfs, ignore_index=True) if expired_dfs else pd.DataFrame(columns=current_state.columns)
+            # Convert arro3 batches to PyArrow via PyCapsule interface (zero-copy)
+            pa_batches = [pa.record_batch(batch) for batch in expired_batch]
+            if pa_batches:
+                table = pa.Table.from_batches(pa_batches)
+                rows_to_expire = table.to_pandas(self_destruct=True)
+            else:
+                rows_to_expire = pd.DataFrame(columns=current_state.columns)
         else:
             rows_to_expire = pd.DataFrame(columns=current_state.columns)
         
         # In full_state mode, adjust effective_to for records that have temporal changes
-        if update_mode == 'full_state':
-            # Create a lookup for updates by ID values and effective_from
+        if update_mode == 'full_state' and not rows_to_expire.empty and not updates.empty:
+            # Create a lookup for updates by ID values and effective_from using vectorized operations
             id_cols = self.id_columns
-            updates_lookup = {}
-            for _, update_row in updates.iterrows():
-                id_key = tuple(update_row[col] for col in id_cols)
-                effective_from = update_row['effective_from']
-                key = (id_key, effective_from)
-                updates_lookup[key] = update_row['effective_to']
-            
-            # Adjust effective_to for expire records that have matching updates with same effective_from
-            for idx in range(len(rows_to_expire)):
-                expire_row = rows_to_expire.iloc[idx]
-                id_key = tuple(expire_row[col] for col in id_cols)
-                effective_from = expire_row['effective_from']
-                key = (id_key, effective_from)
-                
+
+            # Build lookup using vectorized zip (much faster than iterrows)
+            update_id_keys = list(zip(*[updates[col].values for col in id_cols]))
+            update_eff_from = updates['effective_from'].values
+            update_eff_to = updates['effective_to'].values
+            updates_lookup = {(id_key, eff_from): eff_to
+                             for id_key, eff_from, eff_to in zip(update_id_keys, update_eff_from, update_eff_to)}
+
+            # Build expire keys using vectorized operations
+            expire_id_keys = list(zip(*[rows_to_expire[col].values for col in id_cols]))
+            expire_eff_from = rows_to_expire['effective_from'].values
+
+            # Find matching updates and adjust effective_to
+            eff_to_col_idx = rows_to_expire.columns.get_loc('effective_to')
+            for idx, (id_key, eff_from) in enumerate(zip(expire_id_keys, expire_eff_from)):
+                key = (id_key, eff_from)
                 if key in updates_lookup:
-                    # There's an update with the same ID and effective_from
-                    # Adjust the expire record's effective_to to match the update's effective_to
-                    update_effective_to = updates_lookup[key]
-                    rows_to_expire.iloc[idx, rows_to_expire.columns.get_loc('effective_to')] = update_effective_to
+                    rows_to_expire.iloc[idx, eff_to_col_idx] = updates_lookup[key]
         
         # as_of_to is now set by Rust layer
         
-        # Convert insert batches back to pandas and combine them
+        # Convert insert batches back to pandas using zero-copy Arrow PyCapsule interface
         if insert_batch:
-            insert_dfs = []
-            for batch in insert_batch:
-                # arro3 doesn't have to_pandas(), use manual conversion
-                data = {}
-                col_names = batch.column_names
-                
-                for i in range(batch.num_columns):
-                    col_name = col_names[i]
-                    column = batch.column(i)
-                    col_data = column.to_pylist()
-                    data[col_name] = col_data
-                
-                insert_dfs.append(pd.DataFrame(data))
-            
-            # Combine all DataFrames
-            rows_to_insert = pd.concat(insert_dfs, ignore_index=True) if insert_dfs else pd.DataFrame(columns=current_state.columns)
+            # Convert arro3 batches to PyArrow via PyCapsule interface (zero-copy)
+            pa_batches = [pa.record_batch(batch) for batch in insert_batch]
+            if pa_batches:
+                table = pa.Table.from_batches(pa_batches)
+                rows_to_insert = table.to_pandas(self_destruct=True)
+            else:
+                rows_to_insert = pd.DataFrame(columns=current_state.columns)
         else:
             rows_to_insert = pd.DataFrame(columns=current_state.columns)
         
@@ -364,18 +349,12 @@ class BitemporalTimeseriesProcessor:
         # Convert dates back to timestamps - handle effective and as_of columns differently
         effective_date_columns = ['effective_from', 'effective_to']
         as_of_timestamp_columns = ['as_of_from', 'as_of_to']
-        
+
         # Convert effective date columns - force datetime.date objects to datetime
+        # Use vectorized pd.to_datetime() instead of slow .apply() per element
         for col in effective_date_columns:
             if col in df.columns:
-                # Handle the case where Arrow returns date objects instead of timestamps
-                def convert_to_datetime(val):
-                    if isinstance(val, date) and not isinstance(val, datetime):
-                        # Convert date to datetime at midnight
-                        return datetime.combine(val, datetime.min.time())
-                    return val
-                
-                df[col] = df[col].apply(convert_to_datetime)
+                # pd.to_datetime handles both date objects and timestamps correctly
                 df[col] = pd.to_datetime(df[col])
         
         # Convert as_of timestamp columns more carefully to preserve precision
@@ -489,23 +468,15 @@ def add_hash_key(df: pd.DataFrame, value_fields: List[str], hash_algorithm: str 
     if missing_cols:
         raise ValueError(f"Value fields not found in DataFrame: {missing_cols}")
 
-    # Convert to Arrow RecordBatch
-    record_batch = pa.RecordBatch.from_pandas(df)
+    # Convert to Arrow RecordBatch (preserve_index=False prevents schema issues)
+    record_batch = pa.RecordBatch.from_pandas(df, preserve_index=False)
 
     # Call the Rust function with the specified algorithm
     result_batch = _add_hash_key_with_algorithm(record_batch, value_fields, hash_algorithm)
-    
-    # Convert back to pandas using the same method as the main processor
-    data = {}
-    col_names = result_batch.column_names
-    
-    for i in range(result_batch.num_columns):
-        col_name = col_names[i]
-        column = result_batch.column(i)
-        col_data = column.to_pylist()
-        data[col_name] = col_data
-    
-    result_df = pd.DataFrame(data)
-    
+
+    # Convert back to pandas using zero-copy Arrow PyCapsule interface
+    pa_batch = pa.record_batch(result_batch)
+    result_df = pa_batch.to_pandas()
+
     return result_df
 
