@@ -74,10 +74,13 @@ class BitemporalTimeseriesProcessor:
         # Prepare DataFrames for processing
         current_state = self._prepare_dataframe(current_state)
         updates = self._prepare_dataframe(updates)
-        
+
+        # Align schemas: reorder columns and validate compatibility
+        current_state, updates = self._align_schemas(current_state, updates)
+
         # Normalize schemas to ensure timezone consistency between DataFrames
         current_state, updates = self._normalize_schemas(current_state, updates)
-        
+
         # Convert pandas DataFrames to Arrow RecordBatches
         # CRITICAL: preserve_index=False prevents pandas index from leaking into Arrow schema
         # Without this, some batches get __index_level_0__ column which breaks Rust consolidation
@@ -229,6 +232,78 @@ class BitemporalTimeseriesProcessor:
         
         return df
     
+    def _align_schemas(self, current_state: pd.DataFrame, updates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Align schemas between current_state and updates to ensure column compatibility.
+
+        This method:
+        1. Validates that both DataFrames have the required columns
+        2. Reorders updates columns to match current_state column order
+        3. Provides clear error messages for schema mismatches
+
+        The current_state schema is treated as canonical (it represents the database schema).
+        When current_state is empty with no columns, updates schema becomes canonical.
+        """
+        # Define temporal columns that are always required
+        temporal_cols = {'effective_from', 'effective_to', 'as_of_from', 'as_of_to'}
+
+        # value_hash is managed internally, so exclude from validation
+        internal_cols = {'value_hash'}
+
+        current_cols = set(current_state.columns)
+        updates_cols = set(updates.columns)
+
+        # Handle empty current_state: use updates schema as canonical
+        # This happens on first insert when there's no existing data
+        if current_state.empty and len(current_cols - internal_cols) <= len(temporal_cols):
+            # current_state has minimal/no schema, adopt updates schema
+            # Reorder current_state to match updates (for consistency)
+            if len(current_cols) > 0 and list(current_state.columns) != list(updates.columns):
+                # Create empty DataFrame with updates schema
+                current_state = pd.DataFrame(columns=updates.columns)
+            return current_state, updates
+
+        # Get non-internal columns for comparison
+        current_data_cols = current_cols - internal_cols
+        updates_data_cols = updates_cols - internal_cols
+
+        # Check for columns in updates that don't exist in current_state
+        extra_in_updates = updates_data_cols - current_data_cols
+        if extra_in_updates:
+            raise ValueError(
+                f"Schema mismatch: updates DataFrame has columns not in current_state: {sorted(extra_in_updates)}. "
+                f"The current_state schema defines the expected columns. "
+                f"Either add these columns to current_state or remove them from updates."
+            )
+
+        # Check for columns in current_state that don't exist in updates
+        missing_in_updates = current_data_cols - updates_data_cols
+        if missing_in_updates:
+            # Separate temporal columns from data columns in the error message
+            missing_temporal = missing_in_updates & temporal_cols
+            missing_data = missing_in_updates - temporal_cols
+
+            error_parts = []
+            if missing_data:
+                error_parts.append(f"data columns: {sorted(missing_data)}")
+            if missing_temporal:
+                error_parts.append(f"temporal columns: {sorted(missing_temporal)}")
+
+            raise ValueError(
+                f"Schema mismatch: updates DataFrame is missing {', '.join(error_parts)}. "
+                f"Expected columns from current_state: {sorted(current_data_cols)}"
+            )
+
+        # Reorder updates columns to match current_state column order
+        # This ensures Arrow schema compatibility when batches are combined
+        canonical_order = list(current_state.columns)
+
+        # Only reorder if the columns are actually in different order
+        if list(updates.columns) != canonical_order:
+            updates = updates[canonical_order]
+
+        return current_state, updates
+
     def _normalize_schemas(self, current_state: pd.DataFrame, updates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Normalize schemas between current_state and updates to ensure timezone consistency.
