@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764593465847,
+  "lastUpdate": 1764596181637,
   "repoUrl": "https://github.com/gingermike/pytemporal",
   "entries": {
     "Rust Benchmarks": [
@@ -89,6 +89,96 @@ window.BENCHMARK_DATA = {
             "name": "parallel_effectiveness/scenario/balanced_workload",
             "value": 6717152,
             "range": "± 123906",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mikerobertlewis@gmail.com",
+            "name": "Mike Lewis",
+            "username": "gingermike"
+          },
+          "committer": {
+            "email": "mikerobertlewis@gmail.com",
+            "name": "Mike Lewis",
+            "username": "gingermike"
+          },
+          "distinct": true,
+          "id": "ddd80bc2d2fe0255eb71454034fdaba3e77bca91",
+          "message": "Chart fix, add all criterion reports to dashboard",
+          "timestamp": "2025-12-01T13:17:58Z",
+          "tree_id": "dfd455936e4f2c800a89372012e2d13fe6d8823f",
+          "url": "https://github.com/gingermike/pytemporal/commit/ddd80bc2d2fe0255eb71454034fdaba3e77bca91"
+        },
+        "date": 1764596181161,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "small_dataset",
+            "value": 82301,
+            "range": "± 445",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "medium_dataset",
+            "value": 361537,
+            "range": "± 2063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "conflation_effectiveness",
+            "value": 66078,
+            "range": "± 253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/10",
+            "value": 42543,
+            "range": "± 446",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/50",
+            "value": 185877,
+            "range": "± 406",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/100",
+            "value": 358745,
+            "range": "± 1069",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/500",
+            "value": 1242595,
+            "range": "± 31819",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/500000",
+            "value": 1608728701,
+            "range": "± 119810881",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel_effectiveness/scenario/few_ids_many_records",
+            "value": 6829811,
+            "range": "± 328526",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel_effectiveness/scenario/many_ids_few_records",
+            "value": 28937821,
+            "range": "± 1918631",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel_effectiveness/scenario/balanced_workload",
+            "value": 6766736,
+            "range": "± 116240",
             "unit": "ns/iter"
           }
         ]
