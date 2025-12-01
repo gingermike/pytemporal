@@ -282,6 +282,9 @@ jobs:
         name: benchmarks-${{ steps.version.outputs.FULL_TAG }}
         path: benchmark-artifacts/*.zip
 
+    - name: Stash version changes before gh-pages operations
+      run: git stash push -- Cargo.toml pyproject.toml Cargo.lock uv.lock
+
     - name: Push Rust benchmark trends to gh-pages
       uses: benchmark-action/github-action-benchmark@v1
       with:
