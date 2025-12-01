@@ -67,13 +67,19 @@ pub fn categorize_records<'a>(
     let mut overlapping_current = Vec::new();
     let mut overlapping_updates = Vec::new();
     let mut non_overlapping_updates = Vec::new();
-    
+
     // Filter and categorize updates
     for update_record in update_records {
+        // Skip empty ranges (effective_from >= effective_to)
+        // These represent zero-width time periods and are invalid
+        if update_record.effective_from >= update_record.effective_to {
+            continue;
+        }
+
         if is_no_change_update(current_records, update_record) {
             continue; // Skip no-change updates
         }
-        
+
         if has_overlap_with_current(current_records, update_record) {
             overlapping_updates.push(update_record);
         } else {

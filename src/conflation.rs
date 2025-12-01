@@ -22,21 +22,118 @@ fn extract_timestamp_as_datetime(array: &dyn arrow::array::Array, idx: usize) ->
     }
 }
 
+/// Check if two data types can be unified (one can be cast to the other)
+fn types_can_unify(type1: &DataType, type2: &DataType) -> bool {
+    if type1 == type2 {
+        return true;
+    }
+    // Null is compatible with anything
+    if *type1 == DataType::Null || *type2 == DataType::Null {
+        return true;
+    }
+    // Integer types can be promoted to Float64 (pandas does this for nullable int columns)
+    let is_int = |t: &DataType| matches!(t, DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64);
+    if (is_int(type1) && *type2 == DataType::Float64) || (is_int(type2) && *type1 == DataType::Float64) {
+        return true;
+    }
+    false
+}
+
 /// Check if two schemas are compatible for concatenation (ignoring metadata)
+/// Treats Null type as compatible with any other type (for NULL value promotion)
+/// Also handles numeric type promotion (int64 → float64) that pandas does for nullable columns
 fn schemas_compatible(schema1: &Schema, schema2: &Schema) -> bool {
     if schema1.fields().len() != schema2.fields().len() {
         return false;
     }
-    
+
     for (field1, field2) in schema1.fields().iter().zip(schema2.fields().iter()) {
-        if field1.name() != field2.name() 
-            || field1.data_type() != field2.data_type() 
-            || field1.is_nullable() != field2.is_nullable() {
+        if field1.name() != field2.name() {
+            return false;
+        }
+        if !types_can_unify(field1.data_type(), field2.data_type()) {
             return false;
         }
     }
-    
+
     true
+}
+
+/// Compute a unified schema from multiple batches, promoting Null types to concrete types
+/// Also promotes integers to Float64 when mixed (pandas behavior for nullable int columns)
+fn compute_unified_schema(batches: &[RecordBatch]) -> Schema {
+    if batches.is_empty() {
+        return Schema::empty();
+    }
+
+    let first_schema = batches[0].schema();
+    let mut unified_types: Vec<DataType> = first_schema.fields().iter()
+        .map(|f| f.data_type().clone())
+        .collect();
+
+    let is_int = |t: &DataType| matches!(t, DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64);
+
+    // Find unified types across all batches
+    for batch in batches.iter().skip(1) {
+        for (i, field) in batch.schema().fields().iter().enumerate() {
+            let current_type = &unified_types[i];
+            let new_type = field.data_type();
+
+            // Promote Null to concrete type
+            if *current_type == DataType::Null && *new_type != DataType::Null {
+                unified_types[i] = new_type.clone();
+            }
+            // Promote int to float64 when we see float64 (or vice versa)
+            else if is_int(current_type) && *new_type == DataType::Float64 {
+                unified_types[i] = DataType::Float64;
+            } else if *current_type == DataType::Float64 && is_int(new_type) {
+                // Keep Float64
+            }
+        }
+    }
+
+    // Build unified schema
+    let unified_fields: Vec<Field> = first_schema.fields().iter()
+        .enumerate()
+        .map(|(i, field)| {
+            Field::new(field.name(), unified_types[i].clone(), true) // nullable for safety
+        })
+        .collect();
+
+    Schema::new(unified_fields)
+}
+
+/// Cast a batch to the unified schema, promoting Null-typed columns and numeric types
+fn cast_batch_to_schema(batch: &RecordBatch, target_schema: &Schema) -> Result<RecordBatch, String> {
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
+    let source_schema = batch.schema();
+
+    for (i, target_field) in target_schema.fields().iter().enumerate() {
+        let col = batch.column(i);
+        let source_type = source_schema.field(i).data_type();
+        let target_type = target_field.data_type();
+
+        if source_type == target_type {
+            columns.push(col.clone());
+        } else if *source_type == DataType::Null {
+            // Create a null array of the target type
+            let null_array = arrow::array::new_null_array(target_type, col.len());
+            columns.push(null_array);
+        } else {
+            // Try to cast (handles int → float64 and similar promotions)
+            let casted = arrow::compute::cast(col, target_type)
+                .map_err(|e| format!(
+                    "Failed to cast column '{}' from {:?} to {:?}: {}",
+                    target_field.name(), source_type, target_type, e
+                ))?;
+            columns.push(casted);
+        }
+    }
+
+    RecordBatch::try_new(Arc::new(target_schema.clone()), columns)
+        .map_err(|e| format!("Failed to create batch with unified schema: {}", e))
 }
 
 /// Create a clean schema without metadata for consolidation
@@ -499,22 +596,23 @@ pub fn consolidate_final_batches(batches: Vec<RecordBatch>) -> Result<Vec<Record
     
     // We want to group batches by schema to ensure compatibility
     let first_schema = batches[0].schema();
-    
+
     // Check if all batches have compatible schemas (ignore metadata differences)
-    for (i, batch) in batches.iter().enumerate() {
-        // Compare core schema (fields and types) without metadata
+    for batch in batches.iter() {
         if !schemas_compatible(&first_schema, &batch.schema()) {
             return Ok(batches); // Truly incompatible schemas, return original to be safe
         }
-        if i < 5 {  // Log first few schemas for debugging
-        }
     }
-    
-    // All batches have compatible schemas, so we can consolidate them
-    // Create a clean schema without metadata to avoid conflicts
-    let clean_schema = create_clean_schema(&first_schema);
-    
-    let table = arrow::compute::concat_batches(&Arc::new(clean_schema), &batches)
+
+    // Compute unified schema (promoting Null types to concrete types)
+    let unified_schema = compute_unified_schema(&batches);
+
+    // Cast all batches to the unified schema
+    let unified_batches: Vec<RecordBatch> = batches.into_iter()
+        .map(|batch| cast_batch_to_schema(&batch, &unified_schema))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let table = arrow::compute::concat_batches(&Arc::new(unified_schema), &unified_batches)
         .map_err(|e| format!("Failed to consolidate batches: {}", e))?;
     
     // Split the consolidated data into reasonably-sized batches (target ~10k rows per batch)

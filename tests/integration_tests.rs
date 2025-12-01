@@ -1313,6 +1313,58 @@ fn test_exact_match_priority_over_adjacent() {
 
 /// Test: Records with same hash but different IDs should NOT be deduplicated.
 ///
+/// Test that empty ranges (effective_from == effective_to) are filtered out.
+/// These represent zero-width time periods and should not be emitted.
+#[test]
+fn test_empty_ranges_filtered_out() {
+    // Current state: record from Jan 1 to Jan 10
+    let current_state = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-01", "2024-01-10", "2024-01-01", "max"),
+    ]);
+
+    // Update that creates a potential empty range scenario:
+    // Update starts exactly where current ends (point update at boundary)
+    let updates = create_batch(vec![
+        (1, "field1", 200, 20, "2024-01-10", "2024-01-10", "2024-01-15", "max"),  // Empty range!
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::Delta,
+        false,
+    ).unwrap();
+
+    // The empty range update should be filtered out - no inserts
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+
+    // Verify no empty ranges were inserted
+    for batch in &changeset.to_insert {
+        let eff_from = batch.column_by_name("effective_from").unwrap();
+        let eff_to = batch.column_by_name("effective_to").unwrap();
+
+        let from_array = eff_from.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+        let to_array = eff_to.as_any().downcast_ref::<TimestampMicrosecondArray>().unwrap();
+
+        for i in 0..batch.num_rows() {
+            let from_val = from_array.value(i);
+            let to_val = to_array.value(i);
+            assert!(from_val < to_val,
+                "Found empty range: effective_from ({}) >= effective_to ({})",
+                from_val, to_val);
+        }
+    }
+
+    // The empty range update should not produce any inserts
+    assert_eq!(total_inserts, 0,
+        "Empty range update should not produce any inserts, got {}", total_inserts);
+}
+
 /// Bug fix: The deduplication logic was incorrectly treating records as duplicates
 /// if they had the same (effective_from, effective_to, value_hash), ignoring ID columns.
 #[test]

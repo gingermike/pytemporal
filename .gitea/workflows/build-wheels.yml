@@ -43,8 +43,8 @@ jobs:
         # Build the Python module for testing (development mode)
         uv run maturin develop
         
-        # Run Python tests
-        uv run python -m pytest tests/test_bitemporal.py -v
+        # Run all Python tests
+        uv run python -m pytest tests/ -v
         
     - name: Build release binary (smoke test)
       run: |

@@ -189,6 +189,12 @@ pub fn emit_segment(
     insert_batches: &mut Vec<RecordBatch>,
     update_as_of_from: Option<chrono::NaiveDateTime>,
 ) -> Result<(), String> {
+    // Skip empty ranges (from_date == to_date)
+    // These represent zero-width time periods and are invalid
+    if from_date >= to_date {
+        return Ok(());
+    }
+
     // Determine what record to emit
     let (record_to_emit, use_current_batch) = if let Some(update_record) = active_updates.first() {
         // Check if the update has different values than current state
