@@ -1,281 +1,166 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1, user-scalable=yes" />
+<head>
+    <title>PyTemporal Benchmarks</title>
+    <meta charset="utf-8">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
-      html {
-        font-family: BlinkMacSystemFont,-apple-system,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,"Fira Sans","Droid Sans","Helvetica Neue",Helvetica,Arial,sans-serif;
-        -webkit-font-smoothing: antialiased;
-        background-color: #fff;
-        font-size: 16px;
-      }
-      body {
-        color: #4a4a4a;
-        margin: 8px;
-        font-size: 1em;
-        font-weight: 400;
-      }
-      header {
-        margin-bottom: 8px;
-        display: flex;
-        flex-direction: column;
-      }
-      main {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-      }
-      a {
-        color: #3273dc;
-        cursor: pointer;
-        text-decoration: none;
-      }
-      a:hover {
-        color: #000;
-      }
-      button {
-        color: #fff;
-        background-color: #3298dc;
-        border-color: transparent;
-        cursor: pointer;
-        text-align: center;
-      }
-      button:hover {
-        background-color: #2793da;
-        flex: none;
-      }
-      .spacer {
-        flex: auto;
-      }
-      .small {
-        font-size: 0.75rem;
-      }
-      footer {
-        margin-top: 16px;
-        display: flex;
-        align-items: center;
-      }
-      .header-label {
-        margin-right: 4px;
-      }
-      .benchmark-set {
-        margin: 8px 0;
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-      }
-      .benchmark-title {
-        font-size: 3rem;
-        font-weight: 600;
-        word-break: break-word;
-        text-align: center;
-      }
-      .benchmark-graphs {
-        display: flex;
-        flex-direction: row;
-        justify-content: space-around;
-        align-items: center;
-        flex-wrap: wrap;
-        width: 100%;
-      }
-      .benchmark-chart {
-        max-width: 1000px;
-      }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; line-height: 1.6; color: #1f2937; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1, h2 { color: #1f2937; }
+        .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin: 20px 0; }
+        .card h3 { margin-top: 0; color: #3b82f6; }
+        a { color: #3b82f6; }
+        .btn { display: inline-block; padding: 8px 16px; background: #3b82f6; color: white; text-decoration: none; border-radius: 4px; margin: 5px 5px 5px 0; }
+        .btn:hover { background: #1d4ed8; }
+        .btn-orange { background: linear-gradient(135deg, #f59e0b, #d97706); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .chart-container { position: relative; height: 350px; margin: 20px 0; }
+        .tab-container { display: flex; gap: 10px; margin-bottom: 15px; }
+        .tab { padding: 8px 16px; border: 1px solid #e5e7eb; border-radius: 4px; cursor: pointer; background: #fff; }
+        .tab.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+        .chart-select { padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 4px; margin-left: auto; }
     </style>
-    <title>Benchmarks</title>
-  </head>
+</head>
+<body>
+    <div class="container">
+        <div style="display: flex; align-items: center; margin-bottom: 30px; border-bottom: 3px solid #3b82f6; padding-bottom: 20px;">
+            <img src="logo.svg" alt="PyTemporal" width="280" height="80" style="margin-right: 20px;">
+            <div>
+                <h1 style="margin: 0;">Performance Benchmarks</h1>
+                <p style="margin: 5px 0 0 0; color: #6b7280;">High-Performance Bitemporal Processing</p>
+            </div>
+        </div>
 
-  <body>
-    <header id="header">
-      <div class="header-item">
-        <strong class="header-label">Last Update:</strong>
-        <span id="last-update"></span>
-      </div>
-      <div class="header-item">
-        <strong class="header-label">Repository:</strong>
-        <a id="repository-link" rel="noopener"></a>
-      </div>
-    </header>
-    <main id="main"></main>
-    <footer>
-      <button id="dl-button">Download data as JSON</button>
-      <div class="spacer"></div>
-      <div class="small">Powered by <a rel="noopener" href="https://github.com/marketplace/actions/continuous-benchmark">github-action-benchmark</a></div>
-    </footer>
+        <div class="card">
+            <h2>📈 Historical Trends</h2>
+            <div class="tab-container">
+                <button class="tab active" onclick="showChart('rust')">🦀 Rust</button>
+                <button class="tab" onclick="showChart('python')">🐍 Python</button>
+                <select class="chart-select" id="benchmarkSelect" onchange="updateChart()">
+                    <option value="all">All Benchmarks</option>
+                </select>
+            </div>
+            <div class="chart-container">
+                <canvas id="benchChart"></canvas>
+            </div>
+            <p style="font-size: 0.9em; color: #6b7280;">Data: <a href="data.js">data.js</a></p>
+        </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.2/dist/Chart.min.js"></script>
+        <h2>🦀 Rust Criterion Reports</h2>
+        <div class="grid">
+            <div class="card">
+                <h3>Core Benchmarks</h3>
+                <a class="btn" href="criterion/small_dataset/report/">Small Dataset</a>
+                <a class="btn" href="criterion/medium_dataset/report/">Medium Dataset</a>
+                <a class="btn btn-orange" href="criterion/medium_dataset/profile/flamegraph.svg">🔥 Flamegraph</a>
+            </div>
+            <div class="card">
+                <h3>Scaling Analysis</h3>
+                <a class="btn" href="criterion/scaling_by_dataset_size/report/">Overview</a>
+                <a class="btn" href="criterion/scaling_by_dataset_size/records/500000/report/">500k Records</a>
+                <a class="btn btn-orange" href="criterion/scaling_by_dataset_size/records/500000/profile/flamegraph.svg">🔥 Flamegraph</a>
+            </div>
+            <div class="card">
+                <h3>Parallel & Conflation</h3>
+                <a class="btn" href="criterion/parallel_effectiveness/report/">Parallel Overview</a>
+                <a class="btn" href="criterion/conflation_effectiveness/report/">Conflation</a>
+                <a class="btn btn-orange" href="criterion/conflation_effectiveness/profile/flamegraph.svg">🔥 Flamegraph</a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>🐍 Python Benchmarks</h3>
+            <p>Python API benchmarks mirror Rust scenarios. Results in <a href="criterion/python_bench_output.json">JSON format</a>.</p>
+        </div>
+
+        <p style="margin-top: 40px; color: #6b7280; text-align: center;">
+            Generated by <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a> and <a href="https://github.com/benchmark-action/github-action-benchmark">github-action-benchmark</a>
+        </p>
+    </div>
+
     <script src="data.js"></script>
-    <script id="main-script">
-      'use strict';
-      (function() {
-        // Colors from https://github.com/github/linguist/blob/master/lib/linguist/languages.yml
-        const toolColors = {
-          cargo: '#dea584',
-          go: '#00add8',
-          benchmarkjs: '#f1e05a',
-          benchmarkluau: '#000080',
-          pytest: '#3572a5',
-          googlecpp: '#f34b7d',
-          catch2: '#f34b7d',
-          julia: '#a270ba',
-          jmh: '#b07219',
-          benchmarkdotnet: '#178600',
-          customBiggerIsBetter: '#38ff38',
-          customSmallerIsBetter: '#ff3838',
-          _: '#333333'
-        };
+    <script>
+    let chart = null;
+    let currentType = 'rust';
+    const colors = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
 
-        function init() {
-          function collectBenchesPerTestCase(entries) {
-            const map = new Map();
-            for (const entry of entries) {
-              const {commit, date, tool, benches} = entry;
-              for (const bench of benches) {
-                const result = { commit, date, tool, bench };
-                const arr = map.get(bench.name);
-                if (arr === undefined) {
-                  map.set(bench.name, [result]);
-                } else {
-                  arr.push(result);
-                }
-              }
-            }
-            return map;
-          }
-
-          const data = window.BENCHMARK_DATA;
-
-          // Render header
-          document.getElementById('last-update').textContent = new Date(data.lastUpdate).toString();
-          const repoLink = document.getElementById('repository-link');
-          repoLink.href = data.repoUrl;
-          repoLink.textContent = data.repoUrl;
-
-          // Render footer
-          document.getElementById('dl-button').onclick = () => {
-            const dataUrl = 'data:,' + JSON.stringify(data, null, 2);
-            const a = document.createElement('a');
-            a.href = dataUrl;
-            a.download = 'benchmark_data.json';
-            a.click();
-          };
-
-          // Prepare data points for charts
-          return Object.keys(data.entries).map(name => ({
-            name,
-            dataSet: collectBenchesPerTestCase(data.entries[name]),
-          }));
+    function initChart() {
+        if (!window.BENCHMARK_DATA) {
+            document.getElementById('benchChart').parentElement.innerHTML = '<p style="color:#6b7280;text-align:center;padding:40px;">No benchmark data available yet. Data will appear after the first tagged release.</p>';
+            return;
         }
+        populateSelect();
+        renderChart();
+    }
 
-        function renderAllChars(dataSets) {
+    function populateSelect() {
+        const select = document.getElementById('benchmarkSelect');
+        const entries = window.BENCHMARK_DATA.entries;
+        const benchNames = new Set();
+        Object.values(entries).forEach(e => e.benches.forEach(b => benchNames.add(b.name)));
+        select.innerHTML = '<option value="all">All Benchmarks</option>';
+        [...benchNames].sort().forEach(name => {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name.length > 40 ? name.slice(0,37) + '...' : name;
+            select.appendChild(opt);
+        });
+    }
 
-          function renderGraph(parent, name, dataset) {
-            const canvas = document.createElement('canvas');
-            canvas.className = 'benchmark-chart';
-            parent.appendChild(canvas);
+    function showChart(type) {
+        currentType = type;
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        event.target.classList.add('active');
+        populateSelect();
+        renderChart();
+    }
 
-            const color = toolColors[dataset.length > 0 ? dataset[0].tool : '_'];
-            const data = {
-              labels: dataset.map(d => d.commit.id.slice(0, 7)),
-              datasets: [
-                {
-                  label: name,
-                  data: dataset.map(d => d.bench.value),
-                  borderColor: color,
-                  backgroundColor: color + '60', // Add alpha for #rrggbbaa
-                }
-              ],
-            };
-            const options = {
-              scales: {
-                xAxes: [
-                  {
-                    scaleLabel: {
-                      display: true,
-                      labelString: 'commit',
-                    },
-                  }
-                ],
-                yAxes: [
-                  {
-                    scaleLabel: {
-                      display: true,
-                      labelString: dataset.length > 0 ? dataset[0].bench.unit : '',
-                    },
-                    ticks: {
-                      beginAtZero: true,
-                    }
-                  }
-                ],
-              },
-              tooltips: {
-                callbacks: {
-                  afterTitle: items => {
-                    const {index} = items[0];
-                    const data = dataset[index];
-                    return '\n' + data.commit.message + '\n\n' + data.commit.timestamp + ' committed by @' + data.commit.committer.username + '\n';
-                  },
-                  label: item => {
-                    let label = item.value;
-                    const { range, unit } = dataset[item.index].bench;
-                    label += ' ' + unit;
-                    if (range) {
-                      label += ' (' + range + ')';
-                    }
-                    return label;
-                  },
-                  afterLabel: item => {
-                    const { extra } = dataset[item.index].bench;
-                    return extra ? '\n' + extra : '';
-                  }
-                }
-              },
-              onClick: (_mouseEvent, activeElems) => {
-                if (activeElems.length === 0) {
-                  return;
-                }
-                // XXX: Undocumented. How can we know the index?
-                const index = activeElems[0]._index;
-                const url = dataset[index].commit.url;
-                window.open(url, '_blank');
-              },
-            };
+    function updateChart() {
+        renderChart();
+    }
 
-            new Chart(canvas, {
-              type: 'line',
-              data,
-              options,
-            });
-          }
-
-          function renderBenchSet(name, benchSet, main) {
-            const setElem = document.createElement('div');
-            setElem.className = 'benchmark-set';
-            main.appendChild(setElem);
-
-            const nameElem = document.createElement('h1');
-            nameElem.className = 'benchmark-title';
-            nameElem.textContent = name;
-            setElem.appendChild(nameElem);
-
-            const graphsElem = document.createElement('div');
-            graphsElem.className = 'benchmark-graphs';
-            setElem.appendChild(graphsElem);
-
-            for (const [benchName, benches] of benchSet.entries()) {
-              renderGraph(graphsElem, benchName, benches)
-            }
-          }
-
-          const main = document.getElementById('main');
-          for (const {name, dataSet} of dataSets) {
-            renderBenchSet(name, dataSet, main);
-          }
+    function renderChart() {
+        const entries = window.BENCHMARK_DATA.entries;
+        const targetName = currentType === 'rust' ? 'Rust Benchmarks' : 'Python Benchmarks';
+        const data = entries[targetName];
+        if (!data || !data.benches.length) {
+            document.getElementById('benchChart').parentElement.innerHTML = '<p style="color:#6b7280;text-align:center;padding:40px;">No ' + targetName.toLowerCase() + ' data available.</p>';
+            return;
         }
+        const selected = document.getElementById('benchmarkSelect').value;
+        const benchmarks = {};
+        data.benches.forEach(b => {
+            if (selected !== 'all' && b.name !== selected) return;
+            if (!benchmarks[b.name]) benchmarks[b.name] = [];
+            benchmarks[b.name].push({ commit: b.commit.id.slice(0,7), value: b.value, unit: b.unit });
+        });
+        const labels = benchmarks[Object.keys(benchmarks)[0]]?.map(d => d.commit) || [];
+        const datasets = Object.entries(benchmarks).map(([name, points], i) => ({
+            label: name.length > 30 ? name.slice(0,27) + '...' : name,
+            data: points.map(p => p.value),
+            borderColor: colors[i % colors.length],
+            backgroundColor: colors[i % colors.length] + '20',
+            tension: 0.3,
+            fill: false
+        }));
+        if (chart) chart.destroy();
+        chart = new Chart(document.getElementById('benchChart'), {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
+                scales: {
+                    y: { title: { display: true, text: currentType === 'rust' ? 'Time (ns)' : 'Iterations/sec' } },
+                    x: { title: { display: true, text: 'Commit' } }
+                }
+            }
+        });
+    }
 
-        renderAllChars(init()); // Start
-      })();
+    document.addEventListener('DOMContentLoaded', initChart);
     </script>
-  </body>
+</body>
 </html>
