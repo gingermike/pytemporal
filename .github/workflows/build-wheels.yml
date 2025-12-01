@@ -231,20 +231,24 @@ jobs:
       run: |
         echo "🦀 Running Rust benchmarks..."
 
-        # Generate flamegraphs for key benchmarks
-        cargo bench --bench bitemporal_benchmarks medium_dataset -- --profile-time 3
-        cargo bench --bench bitemporal_benchmarks conflation_effectiveness -- --profile-time 3
-        cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000" -- --profile-time 2
-
-        # Run remaining benchmarks
+        # First run all benchmarks to generate HTML reports
         cargo bench --bench bitemporal_benchmarks small_dataset
+        cargo bench --bench bitemporal_benchmarks medium_dataset
+        cargo bench --bench bitemporal_benchmarks conflation_effectiveness
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/10"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/50"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/100"
         cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500"
+        cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000"
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/few_ids_many_records"
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/many_ids_few_records"
         cargo bench --bench bitemporal_benchmarks "parallel_effectiveness/scenario/balanced_workload"
+
+        # Now generate flamegraphs for key benchmarks (adds to existing data)
+        echo "🔥 Generating flamegraphs..."
+        cargo bench --bench bitemporal_benchmarks medium_dataset -- --profile-time 3
+        cargo bench --bench bitemporal_benchmarks conflation_effectiveness -- --profile-time 3
+        cargo bench --bench bitemporal_benchmarks "scaling_by_dataset_size/records/500000" -- --profile-time 2
 
         echo "✅ Rust benchmarks completed"
 
@@ -322,13 +326,14 @@ jobs:
         cp -r /tmp/criterion-reports/* bench/criterion/
         cp /tmp/criterion-reports/logo.svg bench/ 2>/dev/null || true
 
-        # Create landing page
+        # Create landing page with Chart.js for historical trends
         cat > bench/index.html << 'HTMLEOF'
         <!DOCTYPE html>
         <html>
         <head>
             <title>PyTemporal Benchmarks</title>
             <meta charset="utf-8">
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; line-height: 1.6; color: #1f2937; }
                 .container { max-width: 1200px; margin: 0 auto; }
@@ -340,6 +345,11 @@ jobs:
                 .btn:hover { background: #1d4ed8; }
                 .btn-orange { background: linear-gradient(135deg, #f59e0b, #d97706); }
                 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+                .chart-container { position: relative; height: 350px; margin: 20px 0; }
+                .tab-container { display: flex; gap: 10px; margin-bottom: 15px; }
+                .tab { padding: 8px 16px; border: 1px solid #e5e7eb; border-radius: 4px; cursor: pointer; background: #fff; }
+                .tab.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+                .chart-select { padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 4px; margin-left: auto; }
             </style>
         </head>
         <body>
@@ -354,12 +364,17 @@ jobs:
 
                 <div class="card">
                     <h2>📈 Historical Trends</h2>
-                    <p>Performance tracked across releases:</p>
-                    <ul>
-                        <li><strong>Rust Benchmarks</strong> - Core algorithm performance</li>
-                        <li><strong>Python Benchmarks</strong> - Python API performance</li>
-                    </ul>
-                    <p>Data: <a href="data.js">bench/data.js</a></p>
+                    <div class="tab-container">
+                        <button class="tab active" onclick="showChart('rust')">🦀 Rust</button>
+                        <button class="tab" onclick="showChart('python')">🐍 Python</button>
+                        <select class="chart-select" id="benchmarkSelect" onchange="updateChart()">
+                            <option value="all">All Benchmarks</option>
+                        </select>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="benchChart"></canvas>
+                    </div>
+                    <p style="font-size: 0.9em; color: #6b7280;">Data: <a href="data.js">bench/data.js</a></p>
                 </div>
 
                 <h2>🦀 Rust Criterion Reports</h2>
@@ -377,9 +392,10 @@ jobs:
                         <a class="btn btn-orange" href="criterion/scaling_by_dataset_size/records/500000/profile/flamegraph.svg">🔥 Flamegraph</a>
                     </div>
                     <div class="card">
-                        <h3>Parallel Effectiveness</h3>
-                        <a class="btn" href="criterion/parallel_effectiveness/report/">Overview</a>
+                        <h3>Parallel & Conflation</h3>
+                        <a class="btn" href="criterion/parallel_effectiveness/report/">Parallel Overview</a>
                         <a class="btn" href="criterion/conflation_effectiveness/report/">Conflation</a>
+                        <a class="btn btn-orange" href="criterion/conflation_effectiveness/profile/flamegraph.svg">🔥 Flamegraph</a>
                     </div>
                 </div>
 
@@ -392,6 +408,90 @@ jobs:
                     Generated by <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a> and <a href="https://github.com/benchmark-action/github-action-benchmark">github-action-benchmark</a>
                 </p>
             </div>
+
+            <script src="data.js"></script>
+            <script>
+            let chart = null;
+            let currentType = 'rust';
+            const colors = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+
+            function initChart() {
+                if (!window.BENCHMARK_DATA) {
+                    document.getElementById('benchChart').parentElement.innerHTML = '<p style="color:#6b7280;text-align:center;padding:40px;">No benchmark data available yet. Data will appear after the first tagged release.</p>';
+                    return;
+                }
+                populateSelect();
+                renderChart();
+            }
+
+            function populateSelect() {
+                const select = document.getElementById('benchmarkSelect');
+                const entries = window.BENCHMARK_DATA.entries;
+                const benchNames = new Set();
+                Object.values(entries).forEach(e => e.benches.forEach(b => benchNames.add(b.name)));
+                select.innerHTML = '<option value="all">All Benchmarks</option>';
+                [...benchNames].sort().forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name.length > 40 ? name.slice(0,37) + '...' : name;
+                    select.appendChild(opt);
+                });
+            }
+
+            function showChart(type) {
+                currentType = type;
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                event.target.classList.add('active');
+                populateSelect();
+                renderChart();
+            }
+
+            function updateChart() {
+                renderChart();
+            }
+
+            function renderChart() {
+                const entries = window.BENCHMARK_DATA.entries;
+                const targetName = currentType === 'rust' ? 'Rust Benchmarks' : 'Python Benchmarks';
+                const data = entries[targetName];
+                if (!data || !data.benches.length) {
+                    document.getElementById('benchChart').parentElement.innerHTML = '<p style="color:#6b7280;text-align:center;padding:40px;">No ' + targetName.toLowerCase() + ' data available.</p>';
+                    return;
+                }
+                const selected = document.getElementById('benchmarkSelect').value;
+                const benchmarks = {};
+                data.benches.forEach(b => {
+                    if (selected !== 'all' && b.name !== selected) return;
+                    if (!benchmarks[b.name]) benchmarks[b.name] = [];
+                    benchmarks[b.name].push({ commit: b.commit.id.slice(0,7), value: b.value, unit: b.unit });
+                });
+                const labels = benchmarks[Object.keys(benchmarks)[0]]?.map(d => d.commit) || [];
+                const datasets = Object.entries(benchmarks).map(([name, points], i) => ({
+                    label: name.length > 30 ? name.slice(0,27) + '...' : name,
+                    data: points.map(p => p.value),
+                    borderColor: colors[i % colors.length],
+                    backgroundColor: colors[i % colors.length] + '20',
+                    tension: 0.3,
+                    fill: false
+                }));
+                if (chart) chart.destroy();
+                chart = new Chart(document.getElementById('benchChart'), {
+                    type: 'line',
+                    data: { labels, datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
+                        scales: {
+                            y: { title: { display: true, text: currentType === 'rust' ? 'Time (ns)' : 'Iterations/sec' } },
+                            x: { title: { display: true, text: 'Commit' } }
+                        }
+                    }
+                });
+            }
+
+            document.addEventListener('DOMContentLoaded', initChart);
+            </script>
         </body>
         </html>
         HTMLEOF
