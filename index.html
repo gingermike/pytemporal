@@ -126,6 +126,12 @@
         renderChart();
     }
 
+    function toMs(value, unit) {
+        if (unit === 'ns/iter') return value / 1000000;
+        if (unit === 'iter/sec') return 1000 / value;
+        return value;
+    }
+
     function renderChart() {
         const targetName = currentType === 'rust' ? 'Rust Benchmarks' : 'Python Benchmarks';
         const runs = window.BENCHMARK_DATA.entries[targetName] || [];
@@ -140,7 +146,7 @@
             run.benches.forEach(b => {
                 if (selected !== 'all' && b.name !== selected) return;
                 if (!benchmarks[b.name]) benchmarks[b.name] = [];
-                benchmarks[b.name].push({ commit: commitId, value: b.value, unit: b.unit });
+                benchmarks[b.name].push({ commit: commitId, value: toMs(b.value, b.unit) });
             });
         });
         const labels = benchmarks[Object.keys(benchmarks)[0]]?.map(d => d.commit) || [];
@@ -161,7 +167,7 @@
                 maintainAspectRatio: false,
                 plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } },
                 scales: {
-                    y: { title: { display: true, text: currentType === 'rust' ? 'Time (ns)' : 'Iterations/sec' } },
+                    y: { title: { display: true, text: 'Time (ms)' } },
                     x: { title: { display: true, text: 'Commit' } }
                 }
             }
