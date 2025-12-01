@@ -176,11 +176,14 @@ jobs:
           - Conflation optimization for reduced storage
           - Adaptive parallelisation for large datasets
           
-          ## Benchmark Results (v${{ steps.version.outputs.VERSION }})
+          ## Performance Benchmarks
+          - 📈 [Benchmark Dashboard](https://gingermike.github.io/pytemporal/bench/) - Historical trends
+          - 📊 [Criterion Reports](https://gingermike.github.io/pytemporal/bench/criterion/report/) - Detailed analysis
+
+          Typical performance (v${{ steps.version.outputs.VERSION }}):
           - Small Dataset (5 records): ~30-35 µs
-          - Medium Dataset (100 records): ~165-170 µs  
+          - Medium Dataset (100 records): ~165-170 µs
           - Large Dataset (500k records): ~900-950 ms
-          - Conflation Effectiveness: ~28 µs
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

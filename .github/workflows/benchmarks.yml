@@ -1,0 +1,314 @@
+name: Performance Benchmarks
+
+# Runs benchmarks and publishes results to GitHub Pages
+#
+# View results at:
+#   - Dashboard: https://gingermike.github.io/pytemporal/bench/
+#   - Criterion: https://gingermike.github.io/pytemporal/bench/criterion/report/
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  deployments: write
+
+jobs:
+  # ===========================================
+  # Rust Benchmarks (Criterion)
+  # ===========================================
+  rust-benchmark:
+    name: Rust Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install gnuplot (for criterion graphs)
+        run: sudo apt-get update && sudo apt-get install -y gnuplot
+
+      - name: Run Rust benchmarks (full criterion output)
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+        run: cargo bench --bench bitemporal_benchmarks
+
+      - name: Generate bencher format output (for trend tracking)
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+        run: |
+          cargo bench --bench bitemporal_benchmarks -- --noplot --output-format bencher | tee rust_bench_output.txt
+
+      - name: Package criterion HTML reports
+        run: |
+          mkdir -p criterion-reports
+          cp -r target/criterion/* criterion-reports/
+          # Remove raw data files to save space
+          find criterion-reports -name "*.json" -type f -delete
+          find criterion-reports -name "*.csv" -type f -delete
+
+      - name: Upload Rust benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-benchmark-results
+          path: rust_bench_output.txt
+
+      - name: Upload criterion HTML reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-reports
+          path: criterion-reports/
+
+  # ===========================================
+  # Python Benchmarks (pytest-benchmark)
+  # ===========================================
+  python-benchmark:
+    name: Python Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install pytest pytest-benchmark pandas pyarrow numpy arro3-core psutil maturin
+
+      - name: Build Python module
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+        run: uv run maturin develop --release
+
+      - name: Run Python benchmarks
+        run: |
+          uv run pytest benches/test_python_benchmarks.py \
+            --benchmark-only \
+            --benchmark-json=python_bench_output.json \
+            --benchmark-sort=name \
+            --benchmark-min-rounds=3 \
+            -v
+
+      - name: Upload Python benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-benchmark-results
+          path: python_bench_output.json
+
+  # ===========================================
+  # Publish to GitHub Pages
+  # ===========================================
+  publish-benchmarks:
+    name: Publish Benchmark Results
+    needs: [rust-benchmark, python-benchmark]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Rust benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-benchmark-results
+          path: ./bench-results/
+
+      - name: Download Python benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: python-benchmark-results
+          path: ./bench-results/
+
+      - name: Download criterion HTML reports
+        uses: actions/download-artifact@v4
+        with:
+          name: criterion-reports
+          path: ./criterion-reports/
+
+      - name: Publish Rust benchmark trends
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Rust Benchmarks (Criterion)
+          tool: 'cargo'
+          output-file-path: ./bench-results/rust_bench_output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+          benchmark-data-dir-path: 'bench'
+          max-items-in-chart: 50
+
+      - name: Publish Python benchmark trends
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: Python Benchmarks (pytest-benchmark)
+          tool: 'pytest'
+          output-file-path: ./bench-results/python_bench_output.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          alert-threshold: '150%'
+          comment-on-alert: true
+          fail-on-alert: false
+          benchmark-data-dir-path: 'bench'
+          max-items-in-chart: 50
+
+      - name: Add criterion reports and push to gh-pages
+        run: |
+          git fetch origin gh-pages || git checkout --orphan gh-pages
+          git checkout gh-pages
+
+          # Add criterion reports
+          mkdir -p bench/criterion
+          cp -r ./criterion-reports/* bench/criterion/
+
+          # Create index page
+          cat > bench/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>PyTemporal Benchmarks</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }
+              h1 { color: #333; }
+              .card { background: #f5f5f5; border-radius: 8px; padding: 20px; margin: 20px 0; }
+              .card h2 { margin-top: 0; }
+              a { color: #0066cc; }
+              .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-left: 8px; }
+              .rust { background: #dea584; color: #000; }
+              .python { background: #3776ab; color: #fff; }
+              ul { line-height: 1.8; }
+            </style>
+          </head>
+          <body>
+            <h1>🚀 PyTemporal Performance Benchmarks</h1>
+            <p>High-performance bitemporal timeseries processing.</p>
+
+            <div class="card">
+              <h2>🦀 Rust Benchmarks <span class="badge rust">Criterion</span></h2>
+              <p>Detailed statistical analysis with violin plots and regression analysis:</p>
+              <ul>
+                <li><a href="criterion/report/index.html">📊 Full Criterion Report</a></li>
+                <li><a href="criterion/small_dataset/report/index.html">small_dataset</a></li>
+                <li><a href="criterion/medium_dataset/report/index.html">medium_dataset</a></li>
+                <li><a href="criterion/scaling_by_dataset_size/report/index.html">scaling_by_dataset_size</a></li>
+                <li><a href="criterion/parallel_effectiveness/report/index.html">parallel_effectiveness</a></li>
+                <li><a href="criterion/conflation_effectiveness/report/index.html">conflation_effectiveness</a></li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h2>🐍 Python Benchmarks <span class="badge python">pytest-benchmark</span></h2>
+              <p>Python API performance matching Rust benchmark scenarios.</p>
+              <p>Results tracked in <a href="data.js">benchmark trend data</a>.</p>
+            </div>
+
+            <div class="card">
+              <h2>📈 Performance Trends</h2>
+              <p>Historical performance data is stored in <a href="data.js">data.js</a> and displayed in PR comments.</p>
+            </div>
+
+            <hr>
+            <p><small>Generated by <a href="https://github.com/benchmark-action/github-action-benchmark">github-action-benchmark</a> and <a href="https://bheisler.github.io/criterion.rs/">Criterion.rs</a></small></p>
+          </body>
+          </html>
+          EOF
+
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add bench/
+          git commit -m "Update benchmarks" || echo "No changes"
+          git push origin gh-pages
+
+  # ===========================================
+  # PR Comment
+  # ===========================================
+  comment-pr:
+    name: Comment on PR
+    needs: [rust-benchmark, python-benchmark]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./bench-results/
+
+      - name: Generate summary
+        run: |
+          python3 << 'PYEOF'
+          import json, re
+
+          summary = ["## 📊 Benchmark Results\n"]
+
+          # Rust
+          summary.append("### 🦀 Rust (Criterion)\n| Benchmark | Time |\n|-----------|------|")
+          try:
+              with open('./bench-results/rust-benchmark-results/rust_bench_output.txt') as f:
+                  for line in f:
+                      m = re.search(r'test\s+(\S+)\s+\.\.\.\s+bench:\s+([\d,]+)\s+ns/iter', line)
+                      if m:
+                          name, ns = m.group(1), int(m.group(2).replace(',', ''))
+                          t = f"{ns/1e9:.2f}s" if ns >= 1e9 else f"{ns/1e6:.2f}ms" if ns >= 1e6 else f"{ns/1e3:.2f}µs" if ns >= 1e3 else f"{ns}ns"
+                          summary.append(f"| `{name}` | {t} |")
+          except Exception as e:
+              summary.append(f"| Error | {e} |")
+
+          # Python
+          summary.append("\n### 🐍 Python (pytest-benchmark)\n| Benchmark | Time | Throughput |\n|-----------|------|------------|")
+          try:
+              with open('./bench-results/python-benchmark-results/python_bench_output.json') as f:
+                  for b in json.load(f).get('benchmarks', [])[:12]:
+                      name = b['name'].split('::')[-1][:35]
+                      mean = b['stats']['mean']
+                      rows = b.get('extra_info', {}).get('total_rows', 0)
+                      t = f"{mean:.2f}s" if mean >= 1 else f"{mean*1e3:.2f}ms" if mean >= 1e-3 else f"{mean*1e6:.2f}µs"
+                      tp = f"{rows/mean:,.0f}/s" if rows > 0 else "-"
+                      summary.append(f"| `{name}` | {t} | {tp} |")
+          except Exception as e:
+              summary.append(f"| Error | {e} | - |")
+
+          summary.append("\n---\n📈 [Benchmark Dashboard](https://gingermike.github.io/pytemporal/bench/) | 📊 [Criterion Reports](https://gingermike.github.io/pytemporal/bench/criterion/report/)")
+
+          with open('summary.md', 'w') as f:
+              f.write('\n'.join(summary))
+          PYEOF
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('summary.md', 'utf8');
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number
+            });
+            const existing = comments.find(c => c.user.type === 'Bot' && c.body.includes('📊 Benchmark Results'));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }

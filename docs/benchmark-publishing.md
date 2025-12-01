@@ -1,15 +1,21 @@
 # Benchmark Publishing to GitHub Pages
 
-This document explains how the project automatically generates and publishes performance benchmarks with flamegraphs to GitHub Pages.
+This document explains how the project automatically generates and publishes performance benchmarks to GitHub Pages.
+
+## Live Benchmark URLs
+
+- **📈 Dashboard**: https://gingermike.github.io/pytemporal/bench/
+- **📊 Criterion Reports**: https://gingermike.github.io/pytemporal/bench/criterion/report/
 
 ## Overview
 
 The benchmark publishing system consists of:
 
-1. **Criterion.rs benchmarks** with pprof flamegraph integration
-2. **Post-processing script** to add flamegraph links to HTML reports
-3. **GitHub Actions workflow** for automated publishing
-4. **GitHub Pages** hosting for public access
+1. **Rust Benchmarks** - Criterion.rs with pprof flamegraph integration
+2. **Python Benchmarks** - pytest-benchmark mirroring Rust test scenarios
+3. **GitHub Actions Workflow** - Automated benchmark execution and publishing
+4. **github-action-benchmark** - Historical trend tracking with regression alerts
+5. **GitHub Pages** - Hosting for reports and dashboards
 
 ## Components
 
@@ -67,7 +73,28 @@ The `.github/workflows/benchmarks.yml` workflow:
 3. **Creates landing page** with benchmark overview
 4. **Publishes to GitHub Pages** automatically
 
-### 5. Benchmark Categories
+### 5. Python Benchmarks (pytest-benchmark)
+
+Python benchmarks mirror the Rust test scenarios in `benches/test_python_benchmarks.py`:
+
+```bash
+# Run Python benchmarks locally
+uv run python -m pytest benches/test_python_benchmarks.py --benchmark-only -v
+
+# Save JSON output for CI
+uv run python -m pytest benches/test_python_benchmarks.py --benchmark-only --benchmark-json=results.json
+```
+
+Python benchmark classes:
+- `TestSmallDataset` - Small dataset (5 records)
+- `TestMediumDataset` - Medium dataset (100 records)
+- `TestScalingBySize` - Scaling tests (10 → 500k records)
+- `TestParallelEffectiveness` - ID distribution scenarios
+- `TestWideDatasets` - Many columns (production-like)
+- `TestUpdateModes` - Delta vs full_state comparison
+- `TestConflationEffectiveness` - Adjacent segment merging
+
+### 6. Benchmark Categories
 
 The system generates reports for:
 

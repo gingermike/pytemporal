@@ -49,8 +49,10 @@ print(f"Updated {len(result.to_insert)} records")
 ## Documentation
 
 - **[📚 API Reference](docs/API_REFERENCE.md)** - Complete API documentation
-- **[🎯 Usage Examples](docs/EXAMPLES.md)** - Practical code examples  
+- **[🎯 Usage Examples](docs/EXAMPLES.md)** - Practical code examples
 - **[⚡ Performance Guide](docs/PERFORMANCE.md)** - Benchmarks and optimization tips
+- **[📈 Live Benchmarks](https://gingermike.github.io/pytemporal/bench/)** - Performance dashboard
+- **[📊 Criterion Reports](https://gingermike.github.io/pytemporal/bench/criterion/report/)** - Detailed analysis
 
 ## What is Bitemporal Data?
 

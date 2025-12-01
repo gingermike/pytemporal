@@ -14,15 +14,21 @@ This is a high-performance Rust implementation of a bitemporal timeseries algori
 - `tests/integration_tests.rs` - Rust integration tests (5 comprehensive test scenarios)
 - `tests/test_bitemporal_manual.py` - Python test suite (legacy, comprehensive scenarios)
 - `benches/bitemporal_benchmarks.rs` - Criterion benchmarks (5 benchmark suites)
+- `benches/test_python_benchmarks.py` - Python benchmarks mirroring Rust (pytest-benchmark)
 - `Cargo.toml` - Dependencies and build configuration
 
 ## Key Commands
 - **Test Rust**: `cargo test`
 - **Test Python**: `uv run python -m pytest tests/test_bitemporal_manual.py -v`
-- **Benchmark**: `cargo bench`
+- **Benchmark Rust**: `cargo bench`
+- **Benchmark Python**: `uv run python -m pytest benches/test_python_benchmarks.py --benchmark-only -v`
 - **Build Release**: `cargo build --release`
 - **Build Python Wheel**: `uv run maturin develop` or `uv run maturin build --release`
 - **Python Environment**: Use `uv` for all Python commands to ensure proper virtual environment usage
+
+## Live Benchmarks
+- **Dashboard**: https://gingermike.github.io/pytemporal/bench/
+- **Criterion Reports**: https://gingermike.github.io/pytemporal/bench/criterion/report/
 
 ## CRITICAL Development Workflow
 **⚠️  IMPORTANT**: After making changes to Rust code (src/lib.rs), you MUST rebuild the Python bindings with `uv run maturin develop` before running Python tests. Changes to Rust code are NOT automatically reflected in Python tests until you rebuild the bindings. This has caused confusion in the past where fixes appeared not to work when they actually did.
