@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>parallel_effectiveness Summary - PyTemporal Benchmarks</title>
+    <style type="text/css">
+        body {
+            font: 14px Helvetica Neue;
+            text-rendering: optimizelegibility;
+        }
+
+        .body {
+            width: 960px;
+            margin: auto;
+        }
+
+        a:link {
+            color: #1F78B4;
+            text-decoration: none;
+        }
+
+        h2 {
+            font-size: 36px;
+            font-weight: 300;
+        }
+
+        h3 {
+            font-size: 24px;
+            font-weight: 300;
+        }
+
+        #footer {
+            height: 40px;
+            background: #888;
+            color: white;
+            font-size: larger;
+            font-weight: 300;
+        }
+
+        #footer a {
+            color: white;
+            text-decoration: underline;
+        }
+
+        #footer p {
+            text-align: center
+        }
+    
+        /* PyTemporal Branding Enhancements */
+        .pytemporal-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #3b82f6;
+        }
+        
+        .pytemporal-title {
+            color: #1f2937;
+            font-weight: 300;
+            margin: 0;
+        }
+        
+        /* Enhanced color scheme */
+        body {
+            font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            text-rendering: optimizelegibility;
+            color: #1f2937;
+            line-height: 1.6;
+        }
+
+        h2, h3, h4 {
+            color: #1f2937;
+        }
+        
+        a:link {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        
+        a:hover {
+            color: #1d4ed8;
+            text-decoration: underline;
+        }
+        
+        /* Enhanced flamegraph link styling */
+        .additional_plots a[href*="flamegraph"] {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .additional_plots a[href*="flamegraph"]:hover {
+            background: linear-gradient(135deg, #d97706, #b45309);
+            text-decoration: none;
+        }
+        
+        /* Enhanced footer */
+        #footer {
+            height: 50px;
+            background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+            color: white;
+            font-size: 14px;
+            font-weight: 400;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Improved table styling */
+        table {
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        
+        th, td {
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+        }
+        
+        th {
+            background: #f9fafb;
+            font-weight: 500;
+            color: #374151;
+        }
+</style>
+</head>
+
+<body>
+    <div class="body">
+        <div class="pytemporal-header">
+            <svg width="280" height="80" viewBox="0 0 280 80" xmlns="http://www.w3.org/2000/svg" style="margin-right: 20px;">
+  <!-- Layered/stacked design suggesting temporal dimensions -->
+  <!-- Bottom layer (as-of time) -->
+  <rect x="15" y="45" width="40" height="8" fill="#94a3b8" rx="4"/>
+  <!-- Middle layer (intersection) -->
+  <rect x="20" y="35" width="40" height="8" fill="#3b82f6" rx="4"/>
+  <!-- Top layer (effective time) -->
+  <rect x="25" y="25" width="40" height="8" fill="#1d4ed8" rx="4"/>
+  <!-- Typography -->
+  <text x="75" y="40" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" 
+        font-size="24" font-weight="600" fill="#1f2937" dominant-baseline="middle">PyTemporal</text>
+</svg>
+            <div>
+                <h2 class="pytemporal-title">parallel_effectiveness</h2>
+                <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 16px;">High-Performance Bitemporal Processing Benchmarks</p>
+            </div>
+        </div>
+        <h3>Violin Plot</h3>
+        <a href="violin.svg">
+            <img src="violin.svg" alt="Violin Plot" />
+        </a>
+        <p>This chart shows the relationship between function/parameter and iteration time. The thickness of the shaded
+            region indicates the probability that a measurement of the given function/parameter would take a particular
+            length of time.</p>
+        <section class="plots">
+            <a href="../../parallel_effectiveness/scenario/balanced_workload/report/index.html">
+                <h4>parallel_effectiveness/scenario/balanced_workload</h4>
+            </a>
+            <table width="100%">
+                <tbody>
+                    <tr>
+                        <td>
+                            <a href="../../parallel_effectiveness/scenario/balanced_workload/report/pdf.svg">
+                                <img src="../../parallel_effectiveness/scenario/balanced_workload/report/pdf_small.svg" alt="PDF of Slope" width="450"
+                                    height="300" />
+                            </a>
+                        </td>
+                        <td>
+                            <a href="../../parallel_effectiveness/scenario/balanced_workload/report/iteration_times.svg">
+                                <img src="../../parallel_effectiveness/scenario/balanced_workload/report/iteration_times_small.svg" alt="Iteration Times" width="450"
+                                    height="300" />
+                            </a>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+        <section class="plots">
+            <a href="../../parallel_effectiveness/scenario/few_ids_many_records/report/index.html">
+                <h4>parallel_effectiveness/scenario/few_ids_many_records</h4>
+            </a>
+            <table width="100%">
+                <tbody>
+                    <tr>
+                        <td>
+                            <a href="../../parallel_effectiveness/scenario/few_ids_many_records/report/pdf.svg">
+                                <img src="../../parallel_effectiveness/scenario/few_ids_many_records/report/pdf_small.svg" alt="PDF of Slope" width="450"
+                                    height="300" />
+                            </a>
+                        </td>
+                        <td>
+                            <a href="../../parallel_effectiveness/scenario/few_ids_many_records/report/iteration_times.svg">
+                                <img src="../../parallel_effectiveness/scenario/few_ids_many_records/report/iteration_times_small.svg" alt="Iteration Times" width="450"
+                                    height="300" />
+                            </a>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+        <section class="plots">
+            <a href="../../parallel_effectiveness/scenario/many_ids_few_records/report/index.html">
+                <h4>parallel_effectiveness/scenario/many_ids_few_records</h4>
+            </a>
+            <table width="100%">
+                <tbody>
+                    <tr>
+                        <td>
+                            <a href="../../parallel_effectiveness/scenario/many_ids_few_records/report/pdf.svg">
+                                <img src="../../parallel_effectiveness/scenario/many_ids_few_records/report/pdf_small.svg" alt="PDF of Slope" width="450"
+                                    height="300" />
+                            </a>
+                        </td>
+                        <td>
+                            <a href="../../parallel_effectiveness/scenario/many_ids_few_records/report/iteration_times.svg">
+                                <img src="../../parallel_effectiveness/scenario/many_ids_few_records/report/iteration_times_small.svg" alt="Iteration Times" width="450"
+                                    height="300" />
+                            </a>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+    <div id="footer">
+        <p>Performance benchmarks generated by <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a> for 
+           <strong>PyTemporal</strong> - High-Performance Bitemporal Processing Library</p>
+    </div>
+</body>
+
+</html>

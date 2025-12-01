@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Index - PyTemporal Benchmarks</title>
+    <style type="text/css">
+        body {
+            font: 14px Helvetica Neue;
+            text-rendering: optimizelegibility;
+        }
+
+        .body {
+            width: 960px;
+            margin: auto;
+        }
+
+        a:link {
+            color: #1F78B4;
+            text-decoration: none;
+        }
+
+        h2 {
+            font-size: 36px;
+            font-weight: 300;
+        }
+
+        h3 {
+            font-size: 24px;
+            font-weight: 300;
+        }
+
+        #footer {
+            height: 40px;
+            background: #888;
+            color: white;
+            font-size: larger;
+            font-weight: 300;
+        }
+
+        #footer a {
+            color: white;
+            text-decoration: underline;
+        }
+
+        #footer p {
+            text-align: center
+        }
+
+        table {
+            border-collapse: collapse;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #888;
+        }
+    
+        /* PyTemporal Branding Enhancements */
+        .pytemporal-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #3b82f6;
+        }
+        
+        .pytemporal-title {
+            color: #1f2937;
+            font-weight: 300;
+            margin: 0;
+        }
+        
+        /* Enhanced color scheme */
+        body {
+            font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            text-rendering: optimizelegibility;
+            color: #1f2937;
+            line-height: 1.6;
+        }
+
+        h2, h3, h4 {
+            color: #1f2937;
+        }
+        
+        a:link {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        
+        a:hover {
+            color: #1d4ed8;
+            text-decoration: underline;
+        }
+        
+        /* Enhanced flamegraph link styling */
+        .additional_plots a[href*="flamegraph"] {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .additional_plots a[href*="flamegraph"]:hover {
+            background: linear-gradient(135deg, #d97706, #b45309);
+            text-decoration: none;
+        }
+        
+        /* Enhanced footer */
+        #footer {
+            height: 50px;
+            background: linear-gradient(135deg, #1d4ed8, #3b82f6);
+            color: white;
+            font-size: 14px;
+            font-weight: 400;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        /* Improved table styling */
+        table {
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+        
+        th, td {
+            padding: 8px 12px;
+            border: 1px solid #e5e7eb;
+        }
+        
+        th {
+            background: #f9fafb;
+            font-weight: 500;
+            color: #374151;
+        }
+</style>
+</head>
+
+<body>
+    <div class="body">
+        <div class="pytemporal-header">
+            <svg width="280" height="80" viewBox="0 0 280 80" xmlns="http://www.w3.org/2000/svg" style="margin-right: 20px;">
+  <!-- Layered/stacked design suggesting temporal dimensions -->
+  <!-- Bottom layer (as-of time) -->
+  <rect x="15" y="45" width="40" height="8" fill="#94a3b8" rx="4"/>
+  <!-- Middle layer (intersection) -->
+  <rect x="20" y="35" width="40" height="8" fill="#3b82f6" rx="4"/>
+  <!-- Top layer (effective time) -->
+  <rect x="25" y="25" width="40" height="8" fill="#1d4ed8" rx="4"/>
+  <!-- Typography -->
+  <text x="75" y="40" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" 
+        font-size="24" font-weight="600" fill="#1f2937" dominant-baseline="middle">PyTemporal</text>
+</svg>
+            <div>
+                <h2 class="pytemporal-title">Criterion.rs Benchmark Index</h2>
+                <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 16px;">High-Performance Bitemporal Processing Benchmarks</p>
+            </div>
+        </div>
+        See individual benchmark pages below for more details.
+        <ul>
+            <li><a href="../parallel_effectiveness/report/index.html">parallel_effectiveness</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../parallel_effectiveness/scenario/report/index.html">scenario</a></th>
+                        </tr>
+                        <tr>
+                            <th>balanced_workload</th>
+                            <td><a href="../parallel_effectiveness/scenario/balanced_workload/report/index.html">parallel_effectiveness/scenario/balanced_workload</a></td>
+                        </tr>
+                        <tr>
+                            <th>few_ids_many_records</th>
+                            <td><a href="../parallel_effectiveness/scenario/few_ids_many_records/report/index.html">parallel_effectiveness/scenario/few_ids_many_records</a></td>
+                        </tr>
+                        <tr>
+                            <th>many_ids_few_records</th>
+                            <td><a href="../parallel_effectiveness/scenario/many_ids_few_records/report/index.html">parallel_effectiveness/scenario/many_ids_few_records</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../scaling_by_dataset_size/report/index.html">scaling_by_dataset_size</a></li>
+            
+            <ul>
+                <li>
+                    <table>
+                        <tr>
+                            <th></th>
+                            <th><a href="../scaling_by_dataset_size/records/report/index.html">records</a></th>
+                        </tr>
+                        <tr>
+                            <th>10</th>
+                            <td><a href="../scaling_by_dataset_size/records/10/report/index.html">scaling_by_dataset_size/records/10</a></td>
+                        </tr>
+                        <tr>
+                            <th>50</th>
+                            <td><a href="../scaling_by_dataset_size/records/50/report/index.html">scaling_by_dataset_size/records/50</a></td>
+                        </tr>
+                        <tr>
+                            <th>100</th>
+                            <td><a href="../scaling_by_dataset_size/records/100/report/index.html">scaling_by_dataset_size/records/100</a></td>
+                        </tr>
+                        <tr>
+                            <th>500</th>
+                            <td><a href="../scaling_by_dataset_size/records/500/report/index.html">scaling_by_dataset_size/records/500</a></td>
+                        </tr>
+                        <tr>
+                            <th>500000</th>
+                            <td><a href="../scaling_by_dataset_size/records/500000/report/index.html">scaling_by_dataset_size/records/500000</a></td>
+                        </tr>
+                    </table>
+                </li>
+            </ul>
+            <li><a href="../small_dataset/report/index.html">small_dataset</a></li>
+        </ul>
+    </div>
+    <div id="footer">
+        <p>Performance benchmarks generated by <a href="https://github.com/bheisler/criterion.rs">Criterion.rs</a> for 
+           <strong>PyTemporal</strong> - High-Performance Bitemporal Processing Library</p>
+    </div>
+</body>
+</html>
