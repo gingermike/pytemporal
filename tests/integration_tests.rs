@@ -1403,3 +1403,156 @@ fn test_deduplication_with_same_hash_different_ids() {
         "BUG: Expected 2 inserts but got {}. Records with same hash but different IDs were incorrectly deduplicated.",
         total_inserts);
 }
+/// Bug fix: Multi-day backfill should not pull in adjacent records.
+///
+/// This tests the fix for the "exclusion constraint violation" bug where
+/// backfilling Day 2 data incorrectly expired Day 1 because Day 1 was adjacent
+/// to the update and had the same value hash.
+///
+/// Scenario:
+/// - Day 1: [2024-01-01, 2024-01-02) with value=100
+/// - Day 2: [2024-01-02, 2024-01-03) with value=200
+/// - Day 3: [2024-01-03, 2024-01-04) with value=300
+/// - Backfill Day 2 with value=100 (same as Day 1!)
+///
+/// Expected: Only Day 2 should be expired and updated
+/// Bug: Day 1 was also expired because it was adjacent and had same hash as update
+#[test]
+fn test_backfill_does_not_expire_adjacent_same_value_record() {
+    // Current state: Three consecutive days
+    let current_state = create_batch(vec![
+        // Day 1: value=100
+        (1, "field1", 100, 10, "2024-01-01", "2024-01-02", "2024-01-01", "max"),
+        // Day 2: value=200 (will be corrected to 100)
+        (1, "field1", 200, 20, "2024-01-02", "2024-01-03", "2024-01-02", "max"),
+        // Day 3: value=300
+        (1, "field1", 300, 30, "2024-01-03", "2024-01-04", "2024-01-03", "max"),
+    ]);
+
+    // Backfill: Correct Day 2 to have value=100 (same as Day 1!)
+    let updates = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-02", "2024-01-03", "2024-01-10", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 10).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::Delta,
+        false,
+    ).unwrap();
+
+    // CRITICAL: Only 1 expiry (Day 2), NOT 2 (Day 1 + Day 2)
+    assert_eq!(
+        changeset.to_expire.len(), 1,
+        "BUG: Expected 1 expiry (Day 2 only), got {}. Day 1 was incorrectly expired!",
+        changeset.to_expire.len()
+    );
+
+    // Verify the expired record is Day 2 (index 1), not Day 1 (index 0)
+    assert_eq!(
+        changeset.to_expire[0], 1,
+        "Expected Day 2 (index 1) to be expired, got index {}",
+        changeset.to_expire[0]
+    );
+
+    // Should have exactly 1 insert (the corrected Day 2)
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_inserts, 1,
+        "Expected 1 insert (corrected Day 2), got {}",
+        total_inserts
+    );
+
+    // Verify the insert is for Day 2 range [2024-01-02, 2024-01-03), NOT [2024-01-01, 2024-01-03)
+    let insert_batch = &changeset.to_insert[0];
+    let eff_from_array = insert_batch.column_by_name("effective_from")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    let inserted_from = epoch + chrono::Duration::microseconds(eff_from_array.value(0));
+
+    assert_eq!(
+        inserted_from.date(),
+        NaiveDate::from_ymd_opt(2024, 1, 2).unwrap(),
+        "BUG: Inserted record starts at {:?}, expected 2024-01-02. Was incorrectly merged with Day 1!",
+        inserted_from.date()
+    );
+}
+
+/// Test: Extension scenario should still work (single current + adjacent update).
+///
+/// This ensures the backfill fix doesn't break the legitimate extension behavior
+/// where a single current record + adjacent update with same values should merge.
+#[test]
+fn test_extension_still_works_with_single_current_record() {
+    // Single current record
+    let current_state = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-01", "2024-01-02", "2024-01-01", "max"),
+    ]);
+
+    // Adjacent update with same values (extension)
+    let updates = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-02", "2024-01-03", "2024-01-10", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 10).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::Delta,
+        false,
+    ).unwrap();
+
+    // Should expire the current record (merging)
+    assert_eq!(
+        changeset.to_expire.len(), 1,
+        "Extension scenario: current record should be expired for merging"
+    );
+
+    // Should have 1 merged insert
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_inserts, 1,
+        "Extension scenario: should have 1 merged insert"
+    );
+
+    // Verify the merged record spans [2024-01-01, 2024-01-03)
+    let insert_batch = &changeset.to_insert[0];
+    let eff_from_array = insert_batch.column_by_name("effective_from")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+    let eff_to_array = insert_batch.column_by_name("effective_to")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<TimestampMicrosecondArray>()
+        .unwrap();
+
+    let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap().naive_utc();
+    let merged_from = epoch + chrono::Duration::microseconds(eff_from_array.value(0));
+    let merged_to = epoch + chrono::Duration::microseconds(eff_to_array.value(0));
+
+    assert_eq!(
+        merged_from.date(),
+        NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
+        "Merged record should start at 2024-01-01"
+    );
+    assert_eq!(
+        merged_to.date(),
+        NaiveDate::from_ymd_opt(2024, 1, 3).unwrap(),
+        "Merged record should end at 2024-01-03"
+    );
+}

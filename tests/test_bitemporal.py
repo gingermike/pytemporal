@@ -713,3 +713,136 @@ def test_exact_match_priority_over_adjacent():
     assert len(expiries) == 0, "No expiries expected - exact match found"
     assert len(inserts) == 0, \
         "No inserts expected - exact match should be found, not merged with adjacent"
+
+def test_backfill_does_not_expire_adjacent_same_value_record():
+    """
+    Bug fix: Multi-day backfill should not pull in adjacent records.
+
+    This tests the fix for the "exclusion constraint violation" bug where
+    backfilling Day 2 data incorrectly expired Day 1 because Day 1 was adjacent
+    to the update and had the same value hash.
+
+    Scenario:
+    - Day 1: [2024-01-01, 2024-01-02) with weight=100
+    - Day 2: [2024-01-02, 2024-01-03) with weight=200
+    - Day 3: [2024-01-03, 2024-01-04) with weight=300
+    - Backfill Day 2 with weight=100 (same as Day 1!)
+
+    Expected: Only Day 2 should be expired and updated
+    Bug: Day 1 was also expired because it was adjacent and had same hash as update
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'source'],
+        value_columns=['weight']
+    )
+
+    # Current state: Three consecutive days
+    current_state = pd.DataFrame([
+        # Day 1: weight=100
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2024-01-01'),
+         'effective_to': pd.Timestamp('2024-01-02'),
+         'as_of_from': pd.Timestamp('2024-01-01 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+        # Day 2: weight=200 (will be corrected to 100)
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 200,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': pd.Timestamp('2024-01-03'),
+         'as_of_from': pd.Timestamp('2024-01-02 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+        # Day 3: weight=300
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 300,
+         'effective_from': pd.Timestamp('2024-01-03'),
+         'effective_to': pd.Timestamp('2024-01-04'),
+         'as_of_from': pd.Timestamp('2024-01-03 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    # Backfill: Correct Day 2 to have weight=100 (same as Day 1!)
+    update = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': pd.Timestamp('2024-01-03'),
+         'as_of_from': pd.Timestamp('2024-01-10 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, update,
+        system_date='2024-01-10',
+        update_mode='delta'
+    )
+
+    # CRITICAL: Only 1 expiry (Day 2), NOT 2 (Day 1 + Day 2)
+    assert len(expiries) == 1, \
+        f"BUG: Expected 1 expiry (Day 2 only), got {len(expiries)}. Day 1 was incorrectly expired!"
+
+    # Verify the expired record is Day 2, not Day 1
+    expired_eff_from = expiries['effective_from'].tolist()
+    assert pd.Timestamp('2024-01-01') not in expired_eff_from, \
+        "BUG: Day 1 (2024-01-01) was incorrectly expired!"
+    assert pd.Timestamp('2024-01-02') in expired_eff_from, \
+        "Day 2 (2024-01-02) should be expired"
+
+    # Should have exactly 1 insert (the corrected Day 2)
+    assert len(inserts) == 1, \
+        f"Expected 1 insert (corrected Day 2), got {len(inserts)}"
+
+    # Verify the insert is for Day 2 range, NOT merged with Day 1
+    insert_eff_from = inserts.iloc[0]['effective_from']
+    assert insert_eff_from == pd.Timestamp('2024-01-02'), \
+        f"BUG: Insert starts at {insert_eff_from}, expected 2024-01-02. Was incorrectly merged with Day 1!"
+
+
+def test_extension_still_works_with_single_current_record():
+    """
+    Test: Extension scenario should still work (single current + adjacent update).
+
+    This ensures the backfill fix doesn't break the legitimate extension behavior
+    where a single current record + adjacent update with same values should merge.
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'source'],
+        value_columns=['weight']
+    )
+
+    # Single current record
+    current_state = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2024-01-01'),
+         'effective_to': pd.Timestamp('2024-01-02'),
+         'as_of_from': pd.Timestamp('2024-01-01 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    # Adjacent update with same values (extension)
+    update = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': pd.Timestamp('2024-01-03'),
+         'as_of_from': pd.Timestamp('2024-01-10 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, update,
+        system_date='2024-01-10',
+        update_mode='delta'
+    )
+
+    # Should expire the current record (merging)
+    assert len(expiries) == 1, \
+        "Extension scenario: current record should be expired for merging"
+
+    # Should have 1 merged insert
+    assert len(inserts) == 1, \
+        "Extension scenario: should have 1 merged insert"
+
+    # Verify the merged record spans [2024-01-01, 2024-01-03)
+    merged_from = inserts.iloc[0]['effective_from']
+    merged_to = inserts.iloc[0]['effective_to']
+
+    assert merged_from == pd.Timestamp('2024-01-01'), \
+        f"Merged record should start at 2024-01-01, got {merged_from}"
+    assert merged_to == pd.Timestamp('2024-01-03'), \
+        f"Merged record should end at 2024-01-03, got {merged_to}"
