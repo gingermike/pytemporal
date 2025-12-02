@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764716696859,
+  "lastUpdate": 1764716698383,
   "repoUrl": "https://github.com/gingermike/pytemporal",
   "entries": {
     "Rust Benchmarks": [
@@ -1723,6 +1723,149 @@ window.BENCHMARK_DATA = {
             "unit": "iter/sec",
             "range": "stddev: 0.00018961209606873597",
             "extra": "mean: 10.039545216496785 msec\nrounds: 97"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mikerobertlewis@gmail.com",
+            "name": "Mike Lewis",
+            "username": "gingermike"
+          },
+          "committer": {
+            "email": "mikerobertlewis@gmail.com",
+            "name": "Mike Lewis",
+            "username": "gingermike"
+          },
+          "distinct": true,
+          "id": "134c4a0eb20b20278f6db977c7a567d09c56af9d",
+          "message": "Stop inserts when update is not extending beyond eff to",
+          "timestamp": "2025-12-02T22:46:39Z",
+          "tree_id": "2250002faf6c50334d07fed71c5ebd918a1ba5d5",
+          "url": "https://github.com/gingermike/pytemporal/commit/134c4a0eb20b20278f6db977c7a567d09c56af9d"
+        },
+        "date": 1764716697767,
+        "tool": "pytest",
+        "benches": [
+          {
+            "name": "benches/test_python_benchmarks.py::TestSmallDataset::test_small_dataset",
+            "value": 90.94947682832628,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0005829294448681697",
+            "extra": "mean: 10.995115473699451 msec\nrounds: 19"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestMediumDataset::test_medium_dataset",
+            "value": 87.79077211564802,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0004672493946419542",
+            "extra": "mean: 11.390718818176992 msec\nrounds: 88"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestScalingBySize::test_scaling[10]",
+            "value": 94.3470886212858,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00031487871656390624",
+            "extra": "mean: 10.599161188895323 msec\nrounds: 90"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestScalingBySize::test_scaling[50]",
+            "value": 92.48727025993279,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00035861936567373404",
+            "extra": "mean: 10.812298786519799 msec\nrounds: 89"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestScalingBySize::test_scaling[100]",
+            "value": 88.82855161333423,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0003267191355162638",
+            "extra": "mean: 11.257641623528263 msec\nrounds: 85"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestScalingBySize::test_scaling[500]",
+            "value": 76.29528970931169,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00036330255143247523",
+            "extra": "mean: 13.106969038456274 msec\nrounds: 26"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestScalingBySize::test_scaling[500000]",
+            "value": 0.47842969995253454,
+            "unit": "iter/sec",
+            "range": "stddev: 0.03454523187569915",
+            "extra": "mean: 2.090171241666667 sec\nrounds: 3"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestParallelEffectiveness::test_parallel_scenarios[few_ids_many_records-10-1000]",
+            "value": 37.85223682870736,
+            "unit": "iter/sec",
+            "range": "stddev: 0.001530457662923716",
+            "extra": "mean: 26.418518000014046 msec\nrounds: 8"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestParallelEffectiveness::test_parallel_scenarios[many_ids_few_records-1000-10]",
+            "value": 20.458745176600335,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0017306913175981363",
+            "extra": "mean: 48.87885309524011 msec\nrounds: 21"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestParallelEffectiveness::test_parallel_scenarios[balanced_workload-100-100]",
+            "value": 36.652267782546744,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0006584367485899285",
+            "extra": "mean: 27.283441393937018 msec\nrounds: 33"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestWideDatasets::test_wide_dataset[1000-10]",
+            "value": 40.42466713420712,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0007354331964868846",
+            "extra": "mean: 24.737371285707034 msec\nrounds: 42"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestWideDatasets::test_wide_dataset[5000-20]",
+            "value": 9.760068597453596,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0026979060917448464",
+            "extra": "mean: 102.45829627272295 msec\nrounds: 11"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestWideDatasets::test_wide_dataset[10000-40]",
+            "value": 3.462459361200644,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0034103394166942465",
+            "extra": "mean: 288.81205400003296 msec\nrounds: 4"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestWideDatasets::test_wide_dataset[50000-80]",
+            "value": 0.4035162138708043,
+            "unit": "iter/sec",
+            "range": "stddev: 0.017657192302061014",
+            "extra": "mean: 2.4782151636666945 sec\nrounds: 3"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestUpdateModes::test_delta_mode",
+            "value": 85.81875774975111,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0023798165254611237",
+            "extra": "mean: 11.652464172413403 msec\nrounds: 87"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestUpdateModes::test_full_state_mode",
+            "value": 119.20856905142007,
+            "unit": "iter/sec",
+            "range": "stddev: 0.0002007152595087739",
+            "extra": "mean: 8.388658700941663 msec\nrounds: 107"
+          },
+          {
+            "name": "benches/test_python_benchmarks.py::TestConflationEffectiveness::test_conflation_effectiveness",
+            "value": 94.94655831959379,
+            "unit": "iter/sec",
+            "range": "stddev: 0.00023044878954541227",
+            "extra": "mean: 10.532240638296349 msec\nrounds: 94"
           }
         ]
       }
