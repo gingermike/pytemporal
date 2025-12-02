@@ -846,3 +846,52 @@ def test_extension_still_works_with_single_current_record():
         f"Merged record should start at 2024-01-01, got {merged_from}"
     assert merged_to == pd.Timestamp('2024-01-03'), \
         f"Merged record should end at 2024-01-03, got {merged_to}"
+
+
+def test_update_contained_in_current_is_no_op():
+    """
+    Test: When update is fully contained within current record with same values,
+    it should be a NO-OP (no expiries, no inserts).
+
+    This is a regression test for a bug where the full_state mode would incorrectly
+    insert a new record even when the update was completely covered by existing state.
+
+    Scenario:
+    - Current: A->B effective=[2024-01-01, infinity) with hash X
+    - Update: A->B effective=[2024-01-02, 2024-01-03) with hash X (same values)
+    - Expected: NO-OP (current already covers this period with same values)
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'source'],
+        value_columns=['weight']  # Use value columns so hash is meaningful
+    )
+
+    # Current state: open-ended record from 2024-01-01
+    current_state = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2024-01-01'),
+         'effective_to': INFINITY_TIMESTAMP,
+         'as_of_from': pd.Timestamp('2024-01-01 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    # Backfill update: bounded period WITHIN current range, SAME values
+    backfill_update = pd.DataFrame([
+        {'parent_id': 1, 'child_id': 2, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2024-01-02'),
+         'effective_to': pd.Timestamp('2024-01-03'),
+         'as_of_from': pd.Timestamp('2024-01-05 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, backfill_update,
+        system_date='2024-01-05',
+        update_mode='full_state'
+    )
+
+    # Should be NO-OP: no expiries, no inserts
+    assert len(expiries) == 0, \
+        f"BUG: Expected 0 expiries (current covers update), got {len(expiries)}"
+    assert len(inserts) == 0, \
+        f"BUG: Expected 0 inserts (current covers update with same values), got {len(inserts)}"

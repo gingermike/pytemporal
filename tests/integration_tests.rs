@@ -1556,3 +1556,53 @@ fn test_extension_still_works_with_single_current_record() {
         "Merged record should end at 2024-01-03"
     );
 }
+
+/// Test: When update is fully contained within current record with same values,
+/// it should be a NO-OP (no expiries, no inserts).
+///
+/// This is a regression test for a bug where full_state mode would incorrectly
+/// insert a new record even when the update was completely covered by existing state.
+///
+/// Scenario:
+/// - Current: A->B effective=[2024-01-01, infinity) with hash X
+/// - Update: A->B effective=[2024-01-02, 2024-01-03) with hash X (same values)
+/// - Expected: NO-OP (current already covers this period with same values)
+#[test]
+fn test_update_contained_in_current_is_no_op() {
+    // Current state: open-ended record from 2024-01-01 to infinity
+    let current_state = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-01", "max", "2024-01-01", "max"),
+    ]);
+
+    // Backfill update: bounded period WITHIN current range, SAME values
+    let updates = create_batch(vec![
+        (1, "field1", 100, 10, "2024-01-02", "2024-01-03", "2024-01-05", "max"),
+    ]);
+
+    let system_date = NaiveDate::from_ymd_opt(2024, 1, 5).unwrap();
+
+    let changeset = process_updates(
+        current_state.clone(),
+        updates,
+        vec!["id".to_string()],
+        vec!["field".to_string(), "mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false,
+    ).unwrap();
+
+    // Should be NO-OP: no expiries
+    assert_eq!(
+        changeset.to_expire.len(), 0,
+        "BUG: Expected 0 expiries (current covers update), got {}",
+        changeset.to_expire.len()
+    );
+
+    // Should be NO-OP: no inserts
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_inserts, 0,
+        "BUG: Expected 0 inserts (current covers update with same values), got {}",
+        total_inserts
+    );
+}

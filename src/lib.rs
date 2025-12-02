@@ -937,10 +937,19 @@ fn process_full_state_optimized(
                     // Case 2: Exact same temporal range with same values -> NO CHANGE
                     // Do nothing (no expire, no insert)
                 },
-                (Some(_current_idx), false, false) => {
+                (Some(current_idx), false, false) => {
                     // Case 3: Same values but different non-adjacent temporal ranges
-                    // Insert the update as a separate temporal segment
-                    updates_to_insert.push(update_idx);
+                    // Check if update is CONTAINED within current - if so, NO-OP
+                    let current_temporal = get_temporal_bounds(current_batch, current_idx)?;
+
+                    if current_temporal.0 <= update_temporal.0 && current_temporal.1 >= update_temporal.1 {
+                        // Update is fully contained within current record with same values
+                        // This is a no-change scenario (current already covers this period)
+                        // Do nothing - don't insert
+                    } else {
+                        // Insert the update as a separate temporal segment
+                        updates_to_insert.push(update_idx);
+                    }
                 },
                 (None, _, _) => {
                     // Case 4: Different values -> expire all current, insert update
