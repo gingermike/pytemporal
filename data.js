@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764716698383,
+  "lastUpdate": 1764768628647,
   "repoUrl": "https://github.com/gingermike/pytemporal",
   "entries": {
     "Rust Benchmarks": [
@@ -719,6 +719,96 @@ window.BENCHMARK_DATA = {
             "name": "parallel_effectiveness/scenario/balanced_workload",
             "value": 6728351,
             "range": "± 75057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "mikerobertlewis@gmail.com",
+            "name": "Mike Lewis",
+            "username": "gingermike"
+          },
+          "committer": {
+            "email": "mikerobertlewis@gmail.com",
+            "name": "Mike Lewis",
+            "username": "gingermike"
+          },
+          "distinct": true,
+          "id": "f692f8161a7984cc0a8ffce901bda4b7099eb7f6",
+          "message": "Fix bug with full state extension of tombstone record",
+          "timestamp": "2025-12-03T13:12:14Z",
+          "tree_id": "15f70b5efd46cb007396f23544848a4e993a9fbd",
+          "url": "https://github.com/gingermike/pytemporal/commit/f692f8161a7984cc0a8ffce901bda4b7099eb7f6"
+        },
+        "date": 1764768627806,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "small_dataset",
+            "value": 86328,
+            "range": "± 293",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "medium_dataset",
+            "value": 376418,
+            "range": "± 1874",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "conflation_effectiveness",
+            "value": 66979,
+            "range": "± 1050",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/10",
+            "value": 43745,
+            "range": "± 81",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/50",
+            "value": 191622,
+            "range": "± 414",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/100",
+            "value": 375223,
+            "range": "± 551",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/500",
+            "value": 1341035,
+            "range": "± 8204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "scaling_by_dataset_size/records/500000",
+            "value": 1729491284,
+            "range": "± 138895913",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel_effectiveness/scenario/few_ids_many_records",
+            "value": 6535888,
+            "range": "± 131449",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel_effectiveness/scenario/many_ids_few_records",
+            "value": 26670745,
+            "range": "± 1037836",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel_effectiveness/scenario/balanced_workload",
+            "value": 6613164,
+            "range": "± 71454",
             "unit": "ns/iter"
           }
         ]
