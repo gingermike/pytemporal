@@ -1000,7 +1000,7 @@ fn test_backfill_mixed_tombstone_eligibility() {
     let current_state = create_batch(vec![
         // Record starting BEFORE backfill date - CAN be tombstoned
         (1, "field_a", 10, 20, "2024-01-01", "max", "2024-01-01", "max"),
-        // Record starting ON backfill date - CAN be tombstoned (effective_from == system_date)
+        // Record starting ON backfill date - CANNOT be tombstoned (would create empty range)
         (2, "field_a", 30, 40, "2024-01-05", "max", "2024-01-05", "max"),
         // Record starting AFTER backfill date - should NOT be tombstoned
         (3, "field_a", 50, 60, "2024-01-10", "max", "2024-01-10", "max"),
@@ -1024,14 +1024,15 @@ fn test_backfill_mixed_tombstone_eligibility() {
         false,
     ).unwrap();
 
-    // Records id=1 and id=2 should be expired (effective_from <= system_date)
+    // Only record id=1 should be expired (effective_from < system_date)
+    // Record id=2 should NOT be expired (effective_from == system_date would create empty range)
     // Record id=3 should NOT be expired (effective_from > system_date)
     assert_eq!(
-        changeset.to_expire.len(), 2,
-        "Only records with effective_from <= system_date should be expired"
+        changeset.to_expire.len(), 1,
+        "Only records with effective_from < system_date should be expired"
     );
 
-    // Verify the expired records are id=1 and id=2
+    // Verify the expired record is id=1
     let expired_ids: Vec<i32> = changeset.to_expire.iter()
         .map(|&idx| {
             current_state.column_by_name("id")
@@ -1043,13 +1044,13 @@ fn test_backfill_mixed_tombstone_eligibility() {
         })
         .collect();
     assert!(expired_ids.contains(&1), "Record id=1 should be expired");
-    assert!(expired_ids.contains(&2), "Record id=2 should be expired");
+    assert!(!expired_ids.contains(&2), "Record id=2 should NOT be expired (effective_from == system_date)");
     assert!(!expired_ids.contains(&3), "Record id=3 should NOT be expired (effective_from > system_date)");
 
-    // Verify tombstones are created only for eligible records (2 tombstones + 1 insert = need to check)
-    // The inserts should contain: 2 tombstones for id=1,2 + 1 regular insert for id=99
+    // Verify tombstones are created only for eligible records (1 tombstone + 1 insert)
+    // The inserts should contain: 1 tombstone for id=1 + 1 regular insert for id=99
     let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_inserts, 3, "Should have 2 tombstones + 1 regular insert");
+    assert_eq!(total_inserts, 2, "Should have 1 tombstone + 1 regular insert");
 
     // Verify no tombstone has effective_from > effective_to
     for batch in &changeset.to_insert {

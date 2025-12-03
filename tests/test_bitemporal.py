@@ -421,8 +421,12 @@ def test_backfill_mixed_tombstone_eligibility():
     Test: Backfill with mixed records - some valid to tombstone, some not.
 
     This tests that the filter correctly handles a mix of:
-    - Records that CAN be tombstoned (effective_from <= system_date)
-    - Records that should be SKIPPED (effective_from > system_date)
+    - Records that CAN be tombstoned (effective_from < system_date)
+    - Records that should be SKIPPED (effective_from >= system_date)
+
+    Note: Records where effective_from == system_date cannot be tombstoned because
+    tombstoning sets effective_to = system_date, which would create an empty/invalid
+    range like [2024-01-05, 2024-01-05).
     """
     processor = BitemporalTimeseriesProcessor(
         id_columns=["id", "field"],
@@ -434,7 +438,7 @@ def test_backfill_mixed_tombstone_eligibility():
         # Record starting BEFORE backfill date - CAN be tombstoned
         [1, "test", 10, 20, pd.Timestamp("2024-01-01"), INFINITY_TIMESTAMP,
          pd.Timestamp("2024-01-01"), INFINITY_TIMESTAMP],
-        # Record starting ON backfill date - CAN be tombstoned
+        # Record starting ON backfill date - CANNOT be tombstoned (would create empty range)
         [2, "test", 30, 40, pd.Timestamp("2024-01-05"), INFINITY_TIMESTAMP,
          pd.Timestamp("2024-01-05"), INFINITY_TIMESTAMP],
         # Record starting AFTER backfill date - should NOT be tombstoned
@@ -457,13 +461,14 @@ def test_backfill_mixed_tombstone_eligibility():
         update_mode='full_state'
     )
 
-    # Records id=1 and id=2 should be expired (effective_from <= system_date)
+    # Record id=1 should be expired (effective_from < system_date)
+    # Record id=2 should NOT be expired (effective_from == system_date, would create empty range)
     # Record id=3 should NOT be expired (effective_from > system_date)
-    assert len(expiries) == 2, "Only records with effective_from <= system_date should be expired"
+    assert len(expiries) == 1, "Only records with effective_from < system_date should be expired"
 
     expired_ids = set(expiries['id'].tolist())
     assert 1 in expired_ids, "Record id=1 should be expired"
-    assert 2 in expired_ids, "Record id=2 should be expired"
+    assert 2 not in expired_ids, "Record id=2 should NOT be expired (effective_from == system_date)"
     assert 3 not in expired_ids, "Record id=3 should NOT be expired (effective_from > system_date)"
 
     # CRITICAL: Verify no inserted record has effective_from > effective_to

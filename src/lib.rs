@@ -641,7 +641,10 @@ fn filter_indices_for_tombstoning(
 
     for &idx in indices {
         let effective_from = extract_datetime_flexible(eff_from_array.as_ref(), idx)?;
-        if effective_from <= system_date_time {
+        // Use strict less-than to avoid empty ranges where effective_from == system_date
+        // A tombstone sets effective_to = system_date, so we need effective_from < system_date
+        // to have a valid non-empty range [effective_from, system_date)
+        if effective_from < system_date_time {
             valid_indices.push(idx);
         } else {
             skipped_count += 1;
@@ -651,8 +654,8 @@ fn filter_indices_for_tombstoning(
     if skipped_count > 0 {
         eprintln!(
             "pytemporal warning: Skipped {} record(s) during full_state tombstoning because \
-             their effective_from date is after system_date ({}). These records represent \
-             'future' data from the backfill perspective and will remain unchanged.",
+             their effective_from date is >= system_date ({}). These records cannot be \
+             tombstoned without creating empty/invalid ranges and will remain unchanged.",
             skipped_count,
             system_date
         );
