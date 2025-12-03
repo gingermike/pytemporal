@@ -938,15 +938,22 @@ fn process_full_state_optimized(
                     // Do nothing (no expire, no insert)
                 },
                 (Some(current_idx), false, false) => {
-                    // Case 3: Same values but different non-adjacent temporal ranges
-                    // Check if update is CONTAINED within current - if so, NO-OP
+                    // Case 3: Same values (same hash) but different non-adjacent temporal ranges
                     let current_temporal = get_temporal_bounds(current_batch, current_idx)?;
 
                     if current_temporal.0 <= update_temporal.0 && current_temporal.1 >= update_temporal.1 {
                         // Update is fully contained within current record with same values
                         // This is a no-change scenario (current already covers this period)
                         // Do nothing - don't insert
+                    } else if current_temporal.0 == update_temporal.0 && update_temporal.1 > current_temporal.1 {
+                        // Update starts at same point but EXTENDS BEYOND current (same values)
+                        // e.g., current [2025-10-10, 2025-10-11), update [2025-10-10, infinity)
+                        // Since values are the same, this is effectively "reopening" the record
+                        // Expire current and insert the extended update to avoid overlap
+                        expire_indices.push(current_idx);
+                        updates_to_insert.push(update_idx);
                     } else {
+                        // Different temporal ranges that don't overlap at start
                         // Insert the update as a separate temporal segment
                         updates_to_insert.push(update_idx);
                     }

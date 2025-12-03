@@ -1606,3 +1606,57 @@ fn test_update_contained_in_current_is_no_op() {
         total_inserts
     );
 }
+
+/// Test: When a bounded (tombstone) record exists and an update with the SAME VALUES
+/// extends it to open-ended, the current should be expired and the update inserted.
+///
+/// Scenario:
+/// - Current: [2025-10-10, 2025-10-11) with hash X (bounded/tombstone)
+/// - Update: [2025-10-10, infinity) with hash X (same values, extends to open-ended)
+/// - Expected: Expire current, insert update (no overlap!)
+///
+/// This was a bug where the update was inserted WITHOUT expiring the current,
+/// causing an exclusion constraint violation on overlapping ranges.
+#[test]
+fn test_bounded_to_open_ended_extension_same_values() {
+    let system_date = NaiveDate::from_ymd_opt(2025, 10, 11).unwrap();
+
+    // Current state: bounded record (like a tombstone)
+    // (id, field, mv, price, eff_from, eff_to, as_of_from, as_of_to)
+    let current_batch = create_batch(vec![
+        (1, "A", 100, 10, "2025-10-10", "2025-10-11", "2025-10-10", "max"), // Bounded
+    ]);
+
+    // Update: same values, but extends to infinity (max)
+    let updates_batch = create_batch(vec![
+        (1, "A", 100, 10, "2025-10-10", "max", "2025-10-11", "max"), // Open-ended, same values
+    ]);
+
+    let changeset = process_updates(
+        current_batch,
+        updates_batch,
+        vec!["id".to_string(), "field".to_string()],
+        vec!["mv".to_string(), "price".to_string()],
+        system_date,
+        UpdateMode::FullState,
+        false, // conflate_inputs
+    )
+    .unwrap();
+
+    // The bounded record should be EXPIRED (to avoid overlap)
+    // to_expire is Vec<usize> of indices
+    assert_eq!(
+        changeset.to_expire.len(),
+        1,
+        "Expected 1 expiry (the bounded record), got {}",
+        changeset.to_expire.len()
+    );
+
+    // The new open-ended record should be INSERTED
+    let total_inserts: usize = changeset.to_insert.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        total_inserts, 1,
+        "Expected 1 insert (the extended record), got {}",
+        total_inserts
+    );
+}

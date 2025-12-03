@@ -895,3 +895,312 @@ def test_update_contained_in_current_is_no_op():
         f"BUG: Expected 0 expiries (current covers update), got {len(expiries)}"
     assert len(inserts) == 0, \
         f"BUG: Expected 0 inserts (current covers update with same values), got {len(inserts)}"
+
+
+def test_mixed_bounded_and_open_ended_exact_match():
+    """
+    Regression test: When current state has a mix of open-ended and bounded records,
+    and updates come in that match the bounded record exactly, it should be a NO-OP.
+
+    Scenario:
+    - Current state: 30 rows with effective [2025-10-10, infinity)
+    - Current state: 1 row with effective [2025-10-10, 2025-10-11) (bounded/tombstone)
+    - Updates: 31 rows ALL with effective [2025-10-10, 2025-10-11)
+
+    For the 30 open-ended records:
+    - Update is CONTAINED within current (same start, bounded end within infinity)
+    - Should be NO-OP (current covers the period)
+
+    For the 1 bounded record:
+    - Update has EXACT same temporal range
+    - Should be NO-OP (exact match)
+
+    Bug: The bounded record was incorrectly being re-inserted.
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['id'],
+        value_columns=['value']
+    )
+
+    # Create current state: 30 open-ended + 1 bounded
+    current_rows = []
+    for i in range(30):
+        current_rows.append({
+            'id': i,
+            'value': f'val_{i}',
+            'effective_from': pd.Timestamp('2025-10-10'),
+            'effective_to': INFINITY_TIMESTAMP,  # Open-ended
+            'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+            'as_of_to': INFINITY_TIMESTAMP,
+        })
+    # Add the one bounded record
+    current_rows.append({
+        'id': 30,  # Different ID
+        'value': 'val_30',
+        'effective_from': pd.Timestamp('2025-10-10'),
+        'effective_to': pd.Timestamp('2025-10-11'),  # Bounded
+        'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+        'as_of_to': INFINITY_TIMESTAMP,
+    })
+    current_state = pd.DataFrame(current_rows)
+
+    # Create updates: ALL 31 rows with bounded range
+    update_rows = []
+    for i in range(31):
+        update_rows.append({
+            'id': i,
+            'value': f'val_{i}',  # Same values as current
+            'effective_from': pd.Timestamp('2025-10-10'),
+            'effective_to': pd.Timestamp('2025-10-11'),  # All bounded
+            'as_of_from': pd.Timestamp('2025-10-11 10:00:00'),
+            'as_of_to': INFINITY_TIMESTAMP,
+        })
+    updates = pd.DataFrame(update_rows)
+
+    expiries, inserts = processor.compute_changes(
+        current_state, updates,
+        system_date='2025-10-11',
+        update_mode='full_state'
+    )
+
+    # For the bounded record (id=30): exact match -> NO-OP
+    # For the open-ended records (id=0-29): update contained in current -> NO-OP
+
+    # Check that the bounded record (id=30) is NOT being re-inserted
+    if len(inserts) > 0:
+        inserted_ids = inserts['id'].tolist()
+        assert 30 not in inserted_ids, \
+            f"BUG: Bounded record (id=30) should NOT be re-inserted (exact match). " \
+            f"Inserted IDs: {inserted_ids}"
+
+    # Actually, for the 30 open-ended records, the update is NOT contained -
+    # the update ends at 2025-10-11, but current extends to infinity.
+    # These should result in inserts (new bounded segments) while current remains.
+    # But the bounded record (id=30) should be an exact match -> NO-OP
+
+    # Let's verify just the bounded record behavior
+    bounded_inserts = inserts[inserts['id'] == 30] if len(inserts) > 0 else pd.DataFrame()
+    assert len(bounded_inserts) == 0, \
+        f"BUG: Bounded record (id=30) with exact temporal match should not be re-inserted. " \
+        f"Got {len(bounded_inserts)} insert(s) for id=30"
+
+
+def test_mixed_bounded_precomputed_hash_exact_match():
+    """
+    Variant test with pre-computed value_hash to match real-world scenario.
+
+    Same as test_mixed_bounded_and_open_ended_exact_match but with explicit
+    value_hash column already set (simulating data from a database).
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['id'],
+        value_columns=['value']
+    )
+
+    # Create current state: 30 open-ended + 1 bounded
+    # All have pre-computed value_hash
+    current_rows = []
+    for i in range(30):
+        current_rows.append({
+            'id': i,
+            'value': f'val_{i}',
+            'value_hash': f'hash_{i}',  # Pre-computed hash
+            'effective_from': pd.Timestamp('2025-10-10'),
+            'effective_to': INFINITY_TIMESTAMP,  # Open-ended
+            'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+            'as_of_to': INFINITY_TIMESTAMP,
+        })
+    # Add the one bounded record
+    current_rows.append({
+        'id': 30,
+        'value': 'val_30',
+        'value_hash': 'hash_30',  # Pre-computed hash
+        'effective_from': pd.Timestamp('2025-10-10'),
+        'effective_to': pd.Timestamp('2025-10-11'),  # Bounded
+        'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+        'as_of_to': INFINITY_TIMESTAMP,
+    })
+    current_state = pd.DataFrame(current_rows)
+
+    # Create updates: ALL 31 rows with bounded range and SAME hashes
+    update_rows = []
+    for i in range(31):
+        update_rows.append({
+            'id': i,
+            'value': f'val_{i}',  # Same values as current
+            'value_hash': f'hash_{i}',  # Same hash as current
+            'effective_from': pd.Timestamp('2025-10-10'),
+            'effective_to': pd.Timestamp('2025-10-11'),  # All bounded
+            'as_of_from': pd.Timestamp('2025-10-11 10:00:00'),
+            'as_of_to': INFINITY_TIMESTAMP,
+        })
+    updates = pd.DataFrame(update_rows)
+
+    print(f"\nCurrent state bounded record (id=30):")
+    print(current_state[current_state['id'] == 30][['id', 'effective_from', 'effective_to', 'value_hash']])
+    print(f"\nUpdate for bounded record (id=30):")
+    print(updates[updates['id'] == 30][['id', 'effective_from', 'effective_to', 'value_hash']])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, updates,
+        system_date='2025-10-11',
+        update_mode='full_state'
+    )
+
+    print(f"\nTotal expiries: {len(expiries)}")
+    print(f"Total inserts: {len(inserts)}")
+    if len(inserts) > 0:
+        print(f"Insert IDs: {inserts['id'].tolist()}")
+        if 30 in inserts['id'].tolist():
+            print(f"\nBounded record insert details:")
+            print(inserts[inserts['id'] == 30])
+
+    # Verify bounded record is not re-inserted
+    bounded_inserts = inserts[inserts['id'] == 30] if len(inserts) > 0 else pd.DataFrame()
+    assert len(bounded_inserts) == 0, \
+        f"BUG: Bounded record (id=30) with exact temporal match should not be re-inserted. " \
+        f"Got {len(bounded_inserts)} insert(s) for id=30"
+
+
+def test_mixed_bounded_with_nanosecond_timestamps():
+    """
+    Test with nanosecond-precision timestamps (like database sources).
+
+    Simulates data that comes from a database where timestamps might have
+    nanosecond precision. This tests that the ns -> us conversion doesn't
+    break exact match detection.
+    """
+    import numpy as np
+
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['id'],
+        value_columns=['value']
+    )
+
+    # Create timestamps with explicit nanosecond precision
+    # Simulate database data where timestamps might have subtle differences
+    eff_from_current = np.datetime64('2025-10-10T00:00:00.000000000', 'ns')
+    eff_to_bounded = np.datetime64('2025-10-11T00:00:00.000000000', 'ns')
+    eff_to_infinity = INFINITY_TIMESTAMP
+
+    # Simulate slightly different nanosecond timestamps (like from different DB queries)
+    eff_from_update = np.datetime64('2025-10-10T00:00:00.000000001', 'ns')  # 1 nanosecond different
+    eff_to_update = np.datetime64('2025-10-11T00:00:00.000000001', 'ns')  # 1 nanosecond different
+
+    # Create current state
+    current_rows = []
+    for i in range(30):
+        current_rows.append({
+            'id': i,
+            'value': f'val_{i}',
+            'effective_from': pd.Timestamp(eff_from_current),
+            'effective_to': eff_to_infinity,  # Open-ended
+            'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+            'as_of_to': INFINITY_TIMESTAMP,
+        })
+    # Add bounded record
+    current_rows.append({
+        'id': 30,
+        'value': 'val_30',
+        'effective_from': pd.Timestamp(eff_from_current),
+        'effective_to': pd.Timestamp(eff_to_bounded),  # Bounded
+        'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+        'as_of_to': INFINITY_TIMESTAMP,
+    })
+    current_state = pd.DataFrame(current_rows)
+
+    # Create updates with slightly different nanoseconds
+    update_rows = []
+    for i in range(31):
+        update_rows.append({
+            'id': i,
+            'value': f'val_{i}',  # Same values
+            'effective_from': pd.Timestamp(eff_from_update),  # 1 ns different!
+            'effective_to': pd.Timestamp(eff_to_update),  # 1 ns different!
+            'as_of_from': pd.Timestamp('2025-10-11 10:00:00'),
+            'as_of_to': INFINITY_TIMESTAMP,
+        })
+    updates = pd.DataFrame(update_rows)
+
+    print(f"\nCurrent effective_from (id=30): {current_state[current_state['id']==30]['effective_from'].values[0]}")
+    print(f"Update effective_from (id=30): {updates[updates['id']==30]['effective_from'].values[0]}")
+    print(f"Current effective_to (id=30): {current_state[current_state['id']==30]['effective_to'].values[0]}")
+    print(f"Update effective_to (id=30): {updates[updates['id']==30]['effective_to'].values[0]}")
+
+    expiries, inserts = processor.compute_changes(
+        current_state, updates,
+        system_date='2025-10-11',
+        update_mode='full_state'
+    )
+
+    print(f"\nTotal expiries: {len(expiries)}")
+    print(f"Total inserts: {len(inserts)}")
+    if len(inserts) > 0:
+        print(f"Insert IDs: {inserts['id'].tolist()}")
+        # Show the bounded record insert if present
+        if 30 in inserts['id'].tolist():
+            print(f"\nBounded record being re-inserted (BUG):")
+            print(inserts[inserts['id'] == 30][['id', 'effective_from', 'effective_to']])
+
+    # The bounded record should NOT be re-inserted
+    # After ns -> us conversion, the timestamps should be the same
+    bounded_inserts = inserts[inserts['id'] == 30] if len(inserts) > 0 else pd.DataFrame()
+    assert len(bounded_inserts) == 0, \
+        f"BUG: Bounded record (id=30) should not be re-inserted after ns->us truncation. " \
+        f"Got {len(bounded_inserts)} insert(s)"
+
+
+def test_bounded_to_open_ended_extension_same_values():
+    """
+    Regression test: When a bounded (tombstone) record exists and an update
+    with the SAME VALUES extends it to open-ended, the current should be
+    expired and the update inserted.
+
+    Scenario:
+    - Current: [2025-10-10, 2025-10-11) with hash X (bounded/tombstone)
+    - Update: [2025-10-10, infinity) with hash X (same values, extends to open-ended)
+    - Expected: Expire current, insert update (no overlap!)
+
+    This was a bug where the update was inserted WITHOUT expiring the current,
+    causing an exclusion constraint violation on overlapping ranges.
+    """
+    processor = BitemporalTimeseriesProcessor(
+        id_columns=['parent_id', 'child_id', 'source'],
+        value_columns=['weight']
+    )
+
+    # Current state: bounded record (like a tombstone)
+    current_state = pd.DataFrame([
+        {'parent_id': 2, 'child_id': 3, 'source': 'arm', 'weight': 100,
+         'effective_from': pd.Timestamp('2025-10-10'),
+         'effective_to': pd.Timestamp('2025-10-11'),  # Bounded
+         'as_of_from': pd.Timestamp('2025-10-10 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    # Update: same ID, same values, but extends to infinity
+    updates = pd.DataFrame([
+        {'parent_id': 2, 'child_id': 3, 'source': 'arm', 'weight': 100,  # Same values!
+         'effective_from': pd.Timestamp('2025-10-10'),
+         'effective_to': INFINITY_TIMESTAMP,  # Now open-ended
+         'as_of_from': pd.Timestamp('2025-10-11 10:00:00'),
+         'as_of_to': INFINITY_TIMESTAMP},
+    ])
+
+    expiries, inserts = processor.compute_changes(
+        current_state, updates,
+        system_date='2025-10-11',
+        update_mode='full_state'
+    )
+
+    # The bounded record should be EXPIRED (to avoid overlap)
+    assert len(expiries) == 1, \
+        f"Expected 1 expiry (the bounded record), got {len(expiries)}"
+
+    # The new open-ended record should be INSERTED
+    assert len(inserts) == 1, \
+        f"Expected 1 insert (the extended record), got {len(inserts)}"
+
+    # Verify the insert is the open-ended version
+    assert inserts.iloc[0]['effective_to'] == INFINITY_TIMESTAMP, \
+        f"Expected insert to be open-ended, got effective_to={inserts.iloc[0]['effective_to']}"

@@ -186,3 +186,6 @@ The algorithm has been optimized for memory usage through:
 - **Timestamp Flexibility**: The code now properly handles Date32, Date64, and all Timestamp types (Second/Millisecond/Microsecond/Nanosecond)
 
 This file should be updated whenever a new piece of context or information is added / discovered in this project
+
+## Recent Updates (continued)
+- **2025-12-03**: Fixed bounded-to-open-ended extension bug in full_state mode. When a bounded record (e.g., `[2025-10-10, 2025-10-11)`) exists and an update with the SAME hash extends it to open-ended (e.g., `[2025-10-10, infinity)`), the system now correctly expires the current record and inserts the update. Previously, the update was inserted WITHOUT expiring current, causing exclusion constraint violations on overlapping ranges. Added Case 3 sub-condition in `process_full_state_optimized` to handle this scenario. All 44 Rust + 46 Python tests pass.
