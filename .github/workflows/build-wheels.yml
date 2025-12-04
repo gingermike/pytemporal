@@ -62,14 +62,8 @@ jobs:
       run: |
         VERSION=${{ steps.version.outputs.VERSION }}
         echo "Updating version to: $VERSION"
-
-        # Update Cargo.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-
-        # Update pyproject.toml
         sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-
-        # Verify changes
         echo "Updated Cargo.toml:"
         grep "^version" Cargo.toml
         echo "Updated pyproject.toml:"
@@ -79,35 +73,95 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}-unknown-linux-gnu
+
     - name: Install uv
       run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
     - name: Create virtual environment
       run: uv venv
+
     - name: Install maturin
       run: uv pip install maturin[patchelf]
+
     - name: Build wheel
       run: |
-        # Use the specific Python version set up by actions/setup-python
         PYTHON_PATH=$(which python3)
         echo "Using Python interpreter: $PYTHON_PATH (${{ matrix.python-version }})"
         python3 --version
-
-        # Build wheel for this specific Python version
         uv run maturin build --release --out dist --interpreter $PYTHON_PATH
+
     - name: List built wheels
       run: ls -la dist/
+
     - name: Upload wheel as artifact
       uses: actions/upload-artifact@v4
       with:
         name: wheels-linux-${{ matrix.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
 
+  build-macos-wheels:
+    needs: test
+    runs-on: macos-14
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Extract version from tag
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+        else
+          echo "VERSION=0.1.0-dev" >> $GITHUB_OUTPUT
+          echo "Building development version"
+        fi
+
+    - name: Update version in files
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        VERSION=${{ steps.version.outputs.VERSION }}
+        echo "Updating version to: $VERSION"
+        sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+        sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build wheel
+      run: |
+        PYTHON_PATH=$(which python3)
+        echo "Using Python interpreter: $PYTHON_PATH (${{ matrix.python-version }})"
+        python3 --version
+        maturin build --release --out dist --interpreter $PYTHON_PATH
+
+    - name: List built wheels
+      run: ls -la dist/
+
+    - name: Upload wheel as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-macos-arm64-py${{ matrix.python-version }}
+        path: dist/*.whl
+
   publish-release:
-    needs: [build-linux-wheels, benchmarks]
+    needs: [build-linux-wheels, build-macos-wheels, benchmarks]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -125,7 +179,7 @@ jobs:
     - name: Download all wheel artifacts
       uses: actions/download-artifact@v4
       with:
-        pattern: wheels-linux-*
+        pattern: wheels-*
         path: dist-all/
         
     - name: Download benchmark artifacts
@@ -167,8 +221,12 @@ jobs:
           
           📦 **Download Complete Benchmark Data**: `benchmarks-${{ steps.version.outputs.FULL_TAG }}.zip` (includes flamegraphs)
 
-          ## Linux Wheels Built
+          ## Wheels Built
+          **Linux:**
           - x86_64 (Intel/AMD 64-bit) for Python 3.9, 3.10, 3.11, 3.12
+
+          **macOS:**
+          - arm64 (Apple Silicon M1/M2/M3) for Python 3.9, 3.10, 3.11, 3.12
 
           ## Features
           - High-performance bitemporal timeseries processing  
@@ -520,7 +578,7 @@ jobs:
         git checkout -
 
   publish-pypi:
-    needs: build-linux-wheels
+    needs: [build-linux-wheels, build-macos-wheels]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -535,7 +593,7 @@ jobs:
       - name: Download all built wheel artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: wheels-linux-*
+          pattern: wheels-*
           path: dist-all/
           
       - name: Flatten wheel directory for PyPI
