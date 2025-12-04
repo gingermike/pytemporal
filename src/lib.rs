@@ -623,7 +623,7 @@ fn create_tombstone_records_optimized(
 /// This prevents creating invalid tombstone records during backfill scenarios where
 /// system_date is earlier than existing records' effective_from dates.
 ///
-/// Returns the filtered indices and emits a warning to stderr if any records were skipped.
+/// Returns the filtered indices.
 /// Skipped records represent "future" data from the perspective of the backfill date
 /// and should not be tombstoned (they remain unchanged in the database).
 fn filter_indices_for_tombstoning(
@@ -649,16 +649,6 @@ fn filter_indices_for_tombstoning(
         } else {
             skipped_count += 1;
         }
-    }
-
-    if skipped_count > 0 {
-        eprintln!(
-            "pytemporal warning: Skipped {} record(s) during full_state tombstoning because \
-             their effective_from date is >= system_date ({}). These records cannot be \
-             tombstoned without creating empty/invalid ranges and will remain unchanged.",
-            skipped_count,
-            system_date
-        );
     }
 
     Ok(valid_indices)
